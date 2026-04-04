@@ -1,10 +1,11 @@
 """MuJoCo robot simulator with automatic position control for Panda-Omron mobile manipulator."""
 
 import time
+import threading
 import numpy as np
 import mujoco, mujoco.viewer
 from scipy.spatial.transform import Rotation as R
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict, Any
 from simulator_util import PathPlanner, GridMapUtils
 
 
@@ -79,6 +80,8 @@ class RobotConfig:
     CAM_DISTANCE = 7.5
     CAM_AZIMUTH = 135
     CAM_ELEVATION = -25
+    CAMERA_DEFAULT_WIDTH = 320
+    CAMERA_DEFAULT_HEIGHT = 240
 
     MOBILE_INIT_POSITION = np.array([-1.0, 1.0, 0.0])
     ARM_INIT_POSITION = np.array([-0.0114, -1.0319,  0.0488, -2.2575,  0.0673,  1.5234, 0.6759])
@@ -161,6 +164,10 @@ class MujocoSimulator:
         # Compute forward kinematics
         mujoco.mj_forward(self.model, self.data)
 
+        # Offscreen renderers for vision pipeline (cached by resolution)
+        self._renderers: Dict[Tuple[int, int], mujoco.Renderer] = {}
+        self._render_lock = threading.Lock()
+
     def _get_joint_dof_count(self, joint_id: int) -> int:
         joint_type = self.model.jnt_type[joint_id]
         if joint_type == mujoco.mjtJoint.mjJNT_FREE:
@@ -171,6 +178,93 @@ class MujocoSimulator:
             return 1
         raise ValueError(f"Unsupported joint type for joint_id {joint_id}")
     
+    # ============================================================
+    # Vision / Camera Methods
+    # ============================================================
+
+    def list_cameras(self) -> List[str]:
+        """List named cameras available in the MuJoCo model."""
+        cameras = []
+        for i in range(self.model.ncam):
+            name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_CAMERA, i)
+            if name:
+                cameras.append(name)
+        return cameras
+
+    def _get_renderer(self, width: int, height: int) -> mujoco.Renderer:
+        """Get cached offscreen renderer for resolution, creating if needed."""
+        key = (width, height)
+        if key not in self._renderers:
+            self._renderers[key] = mujoco.Renderer(self.model, width=width, height=height)
+        return self._renderers[key]
+
+    @staticmethod
+    def _build_free_camera() -> mujoco.MjvCamera:
+        """Build a free camera that matches viewer defaults."""
+        cam = mujoco.MjvCamera()
+        cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+        cam.lookat[:] = RobotConfig.CAM_LOOKAT
+        cam.distance = RobotConfig.CAM_DISTANCE
+        cam.azimuth = RobotConfig.CAM_AZIMUTH
+        cam.elevation = RobotConfig.CAM_ELEVATION
+        return cam
+
+    def get_camera_intrinsics(
+        self,
+        width: int = RobotConfig.CAMERA_DEFAULT_WIDTH,
+        height: int = RobotConfig.CAMERA_DEFAULT_HEIGHT,
+        camera_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return pinhole intrinsics for a named camera (or configured free camera)."""
+        if camera_name:
+            cam_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+            if cam_id < 0:
+                raise ValueError(f"Unknown camera name: {camera_name}")
+            fovy = float(self.model.cam_fovy[cam_id])
+        else:
+            # Use MuJoCo global visual FOV for free-camera baseline intrinsics
+            fovy = float(self.model.vis.global_.fovy)
+
+        fovy_rad = np.deg2rad(fovy)
+        fy = 0.5 * height / np.tan(fovy_rad / 2.0)
+        fx = fy
+        cx = (width - 1.0) / 2.0
+        cy = (height - 1.0) / 2.0
+
+        return {
+            "width": width,
+            "height": height,
+            "fov_y_deg": fovy,
+            "fx": float(fx),
+            "fy": float(fy),
+            "cx": float(cx),
+            "cy": float(cy),
+        }
+
+    def capture_camera_frame(
+        self,
+        width: int = RobotConfig.CAMERA_DEFAULT_WIDTH,
+        height: int = RobotConfig.CAMERA_DEFAULT_HEIGHT,
+        camera_name: Optional[str] = None,
+        include_depth: bool = True,
+    ) -> Dict[str, np.ndarray]:
+        """Capture RGB (and optional depth) frame from a named or free camera."""
+        camera = camera_name if camera_name else self._build_free_camera()
+
+        with self._render_lock:
+            renderer = self._get_renderer(width, height)
+            renderer.update_scene(self.data, camera=camera)
+            rgb = renderer.render().copy()
+
+            depth = None
+            if include_depth:
+                renderer.enable_depth_rendering()
+                renderer.update_scene(self.data, camera=camera)
+                depth = renderer.render().copy()
+                renderer.disable_depth_rendering()
+
+        return {"rgb": rgb, "depth": depth}
+
     # ============================================================
     # Mobile Base Control Methods
     # ============================================================

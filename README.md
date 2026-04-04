@@ -81,6 +81,24 @@ Content-Type: application/json
 }
 ```
 
+#### Vision Baseline Endpoints
+
+List available cameras and default free-camera intrinsics:
+```bash
+GET http://localhost:8800/vision/cameras
+```
+
+Capture RGB + depth frame (JSON arrays) from a named camera or free camera:
+```bash
+GET "http://localhost:8800/vision/frame?width=320&height=240&include_depth=true"
+GET "http://localhost:8800/vision/frame?camera_name=<camera_name>&width=320&height=240"
+GET "http://localhost:8800/vision/frame?width=320&height=240&include_rgb=false&include_depth=true"
+```
+
+Notes:
+- `width` / `height` must be positive and at most `1280x720`.
+- At least one of `include_rgb` / `include_depth` must be `true`.
+
 ### Example Code
 
 #### Mobile Base Control
