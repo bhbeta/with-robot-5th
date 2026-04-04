@@ -57,6 +57,24 @@ Executes place sequence at `place_pos`.
 `get_object_positions()` -> `dict`
 Returns dict of objects: `{'name': {'id': int, 'pos': [x,y,z], 'ori': [r,p,y]}}`.
 
+## Vision Baseline (Simulator Camera)
+
+`list_cameras()` -> `list[str]`
+Returns available named MuJoCo cameras in the model.
+
+`get_camera_intrinsics(width=320, height=240, camera_name=None)` -> `dict`
+Returns pinhole intrinsics `{fx, fy, cx, cy, fov_y_deg, width, height}` for a named camera.
+If `camera_name=None`, returns baseline intrinsics for a configured free camera.
+
+`capture_camera_frame(width=320, height=240, camera_name=None, include_depth=True)` -> `dict`
+Returns `{"rgb": np.ndarray, "depth": np.ndarray | None}` from offscreen rendering.
+
+`GET /vision/frame` query options:
+- `width`, `height`: positive integers (max `1280x720`)
+- `camera_name`: optional named MuJoCo camera
+- `include_rgb`: include RGB array in JSON response
+- `include_depth`: include depth array in JSON response
+
 ## Constants
 - `PI`: 3.14159...
 - `RESULT`: Dict for return values.
