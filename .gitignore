@@ -1,0 +1,13 @@
+# Large / generated assets (keep out of git by default)
+model/robocasa/assets/
+
+# Vision experiment outputs
+robot/outputs/
+
+# Local experiment scaffolding (ignore by default; remove patterns if needed)
+robot/tests/
+robot/tools/
+
+# Python cache artifacts
+__pycache__/
+*.pyc

@@ -5,7 +5,7 @@ import queue
 import threading
 import uvicorn
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, Response, status, HTTPException
 from simulator import MujocoSimulator
 import code_repository
 
@@ -69,6 +69,57 @@ def get_environment():
         "timestamp": time.time(),
         "objects": objects,
     }
+
+
+@app.get("/vision/cameras")
+def get_cameras() -> Dict[str, Any]:
+    """List available named cameras and free-camera baseline intrinsics."""
+    width = 320
+    height = 240
+    return {
+        "timestamp": time.time(),
+        "named_cameras": simulator.list_cameras(),
+        "free_camera_intrinsics": simulator.get_camera_intrinsics(width=width, height=height, camera_name=None),
+    }
+
+
+@app.get("/vision/frame")
+def get_vision_frame(
+    width: int = 320,
+    height: int = 240,
+    camera_name: Optional[str] = None,
+    include_depth: bool = True,
+    include_rgb: bool = True
+) -> Dict[str, Any]:
+    """Capture RGB/depth frame for vision-baseline experiments."""
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=400, detail="width/height must be positive integers")
+    if width > 1280 or height > 720:
+        raise HTTPException(status_code=400, detail="width/height too large (max: 1280x720)")
+    if not include_rgb and not include_depth:
+        raise HTTPException(status_code=400, detail="At least one of include_rgb/include_depth must be true")
+
+    try:
+        frame = simulator.capture_camera_frame(
+            width=width,
+            height=height,
+            camera_name=camera_name,
+            include_depth=include_depth
+        )
+        intrinsics = simulator.get_camera_intrinsics(width=width, height=height, camera_name=camera_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    response: Dict[str, Any] = {
+        "timestamp": time.time(),
+        "camera_name": camera_name or "free_camera",
+        "intrinsics": intrinsics,
+    }
+    if include_rgb:
+        response["rgb"] = frame["rgb"].tolist()
+    if include_depth and frame["depth"] is not None:
+        response["depth"] = frame["depth"].astype(float).tolist()
+    return response
 
 
 @app.post("/send_action")
