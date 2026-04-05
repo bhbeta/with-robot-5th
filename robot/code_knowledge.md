@@ -96,12 +96,21 @@ Generates point cloud from RGB+depth:
 - `num_points`: number of valid points
 
 Viewer helper:
-- `toggle_viewer_debug_camera_manual_mode()` toggles explicit manual mode for debug camera rig.
-- `toggle_viewer_compact_status()` toggles compact status overlay.
-- `toggle_viewer_help()` toggles extended help overlay.
-- Compact status is shown by default; extended help is hidden by default.
-- In manual mode, arrow keys nudge pan/tilt.
-- Manual mode affects only the debug camera rig, not mobile/arm/gripper APIs.
+- `set_viewer_camera_mode(mode)` supports:
+  - `third_person`
+  - `hand_camera_fixed`
+  - `hand_camera_inspect`
+  - `attached_debug_camera_view`
+  - `attached_debug_camera_control`
+  - `toggle`
+- `toggle_viewer_attached_debug_camera_view()` toggles attached debug camera view on/off.
+- `toggle_viewer_attached_debug_camera_control()` toggles attached debug camera control mode.
+- `toggle_viewer_debug_camera_manual_mode()` is a backward-compatible alias for attached debug camera control.
+- `toggle_viewer_compact_status()` toggles compact right-side debug panel.
+- `toggle_viewer_help()` toggles extended help panel.
+- Compact panel is shown by default; extended help is hidden by default.
+- While attached debug camera view is active, arrow keys rotate camera left/right/up/down.
+- Attached debug camera control affects only the debug camera rig, not mobile/arm/gripper APIs.
 
 `GET /vision/frame` query options:
 - `width`, `height`: positive integers (max `1280x720`)
