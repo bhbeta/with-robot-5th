@@ -122,6 +122,57 @@ def get_vision_frame(
     return response
 
 
+@app.get("/vision/extrinsics")
+def get_vision_extrinsics(camera_name: str) -> Dict[str, Any]:
+    """Return camera extrinsics for a named camera."""
+    try:
+        extrinsics = simulator.get_camera_extrinsics(camera_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {
+        "timestamp": time.time(),
+        "camera_name": camera_name,
+        "extrinsics": extrinsics,
+    }
+
+
+@app.get("/vision/point-cloud")
+def get_vision_point_cloud(
+    camera_name: str,
+    width: int = 320,
+    height: int = 240,
+    max_depth: float = 4.0,
+    stride: int = 4,
+    frame: str = "world"
+) -> Dict[str, Any]:
+    """Generate point cloud from camera RGBD frame."""
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=400, detail="width/height must be positive integers")
+    if width > 1280 or height > 720:
+        raise HTTPException(status_code=400, detail="width/height too large (max: 1280x720)")
+    if stride <= 0:
+        raise HTTPException(status_code=400, detail="stride must be a positive integer")
+    if frame not in ("world", "camera"):
+        raise HTTPException(status_code=400, detail="frame must be one of: world, camera")
+
+    try:
+        point_cloud = simulator.get_camera_point_cloud(
+            camera_name=camera_name,
+            width=width,
+            height=height,
+            max_depth=max_depth,
+            stride=stride,
+            frame=frame,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    return {
+        "timestamp": time.time(),
+        "point_cloud": point_cloud,
+    }
+
+
 @app.post("/send_action")
 def receive_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     """

@@ -69,6 +69,36 @@ If `camera_name=None`, returns baseline intrinsics for a configured free camera.
 `capture_camera_frame(width=320, height=240, camera_name=None, include_depth=True)` -> `dict`
 Returns `{"rgb": np.ndarray, "depth": np.ndarray | None}` from offscreen rendering.
 
+## Debug Camera Rig & Point Cloud
+
+`get_debug_camera_joint_position()` -> `list[float]`
+Returns debug camera pan/tilt joint angles `[pan, tilt]` in radians.
+
+`set_debug_camera_target_joint(target_joint, timeout=5.0, verbose=False)` -> `bool`
+Sets debug camera pan/tilt target angles `[pan, tilt]`. Returns `True` if converged.
+
+`look_at_point(target_xyz, timeout=5.0, verbose=False)` -> `bool`
+Computes debug camera pan/tilt so the camera looks at a world point `[x, y, z]`.
+
+`get_camera_intrinsics(camera_name, width=320, height=240)` -> `dict`
+Returns intrinsics for a named camera.
+
+`get_camera_extrinsics(camera_name)` -> `dict`
+Returns `world_from_camera` / `camera_from_world` transforms and camera world pose.
+Frame convention is OpenCV-like camera frame (`+X` right, `+Y` down, `+Z` forward).
+
+`get_camera_point_cloud(camera_name, max_depth=4.0, stride=4, frame="world", width=320, height=240)` -> `dict`
+Generates point cloud from RGB+depth:
+- `points`: Nx3 list
+- `colors`: Nx3 list in `[0,1]`
+- `frame`: `"world"` or `"camera"`
+- `camera_name`: source camera
+- `num_points`: number of valid points
+
+Viewer helper:
+- `toggle_viewer_wasd_debug_mode()` toggles WASD manual mode (W/A/S/D pan-tilt nudge).
+- Manual keys apply only when that mode is ON.
+
 `GET /vision/frame` query options:
 - `width`, `height`: positive integers (max `1280x720`)
 - `camera_name`: optional named MuJoCo camera

@@ -305,8 +305,90 @@ def get_object_positions() -> Dict[str, Dict[str, Any]]:
     return objects
 
 
+def get_debug_camera_joint_position() -> List[float]:
+    """Get debug camera pan/tilt joint angles [pan, tilt] in radians."""
+    return simulator.get_debug_camera_joint_position().tolist()
+
+
+def set_debug_camera_target_joint(
+    target_joint: List[float],
+    timeout: float = 5.0,
+    verbose: bool = False
+) -> bool:
+    """Set debug camera pan/tilt targets [pan, tilt] in radians."""
+    simulator.set_debug_camera_target_joint(target_joint)
+
+    success = True
+    if timeout > 0:
+        converged = _wait_for_convergence(
+            simulator.get_debug_camera_joint_diff,
+            simulator.get_debug_camera_joint_velocity,
+            pos_threshold=0.01,
+            vel_threshold=0.05,
+            timeout=timeout,
+            stable_frames=3,
+            verbose=verbose
+        )
+        success = converged
+    return success
+
+
+def look_at_point(
+    target_xyz: List[float],
+    timeout: float = 5.0,
+    verbose: bool = False
+) -> bool:
+    """Rotate debug camera rig so it looks at target world point [x, y, z]."""
+    simulator.look_at_point(target_xyz)
+    if timeout <= 0:
+        return True
+    converged = _wait_for_convergence(
+        simulator.get_debug_camera_joint_diff,
+        simulator.get_debug_camera_joint_velocity,
+        pos_threshold=0.01,
+        vel_threshold=0.05,
+        timeout=timeout,
+        stable_frames=3,
+        verbose=verbose
+    )
+    return converged
+
+
+def get_camera_intrinsics(
+    camera_name: str = "robot0_debug_head_camera",
+    width: int = 320,
+    height: int = 240
+) -> Dict[str, Any]:
+    """Get intrinsics for a named camera."""
+    return simulator.get_camera_intrinsics(width=width, height=height, camera_name=camera_name)
+
+
+def get_camera_extrinsics(camera_name: str = "robot0_debug_head_camera") -> Dict[str, Any]:
+    """Get extrinsics for a named camera."""
+    return simulator.get_camera_extrinsics(camera_name)
+
+
+def get_camera_point_cloud(
+    camera_name: str = "robot0_debug_head_camera",
+    max_depth: float = 4.0,
+    stride: int = 4,
+    frame: str = "world",
+    width: int = 320,
+    height: int = 240
+) -> Dict[str, Any]:
+    """Generate point cloud from named camera."""
+    return simulator.get_camera_point_cloud(
+        camera_name=camera_name,
+        max_depth=max_depth,
+        stride=stride,
+        frame=frame,
+        width=width,
+        height=height,
+    )
+
+
 def set_viewer_camera_mode(mode: str = "toggle") -> bool:
-    """Request viewer camera mode update: 'third_person', 'robot_eye', or 'toggle'."""
+    """Request viewer camera mode update: 'third_person', 'robot_eye', 'robot_eye_debug', or 'toggle'."""
     simulator.set_viewer_camera_mode(mode)
     return True
 
@@ -314,6 +396,18 @@ def set_viewer_camera_mode(mode: str = "toggle") -> bool:
 def toggle_viewer_camera_mode() -> bool:
     """Toggle viewer camera mode."""
     simulator.toggle_viewer_camera_mode()
+    return True
+
+
+def toggle_viewer_control_debug() -> bool:
+    """Toggle control debug overlay on the viewer."""
+    simulator.toggle_viewer_control_debug()
+    return True
+
+
+def toggle_viewer_wasd_debug_mode() -> bool:
+    """Toggle WASD manual control mode for debug camera rig in viewer."""
+    simulator.toggle_viewer_wasd_debug_mode()
     return True
 
 
@@ -335,8 +429,16 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         - place_object(place_pos, approach_height, retract_height, return_to_home, timeout, verbose)
         - get_grid_map() -> grid map of the environment
         - get_object_positions() -> list of object dictionaries with id, name, position and orientation
-        - set_viewer_camera_mode(mode) -> request camera mode ('third_person'|'robot_eye'|'toggle')
+        - get_debug_camera_joint_position() -> [pan, tilt] in radians
+        - set_debug_camera_target_joint(target_joint, timeout, verbose) -> move debug camera pan/tilt
+        - look_at_point(target_xyz, timeout, verbose) -> rotate debug camera toward world point
+        - get_camera_intrinsics(camera_name, width, height) -> camera intrinsics
+        - get_camera_extrinsics(camera_name) -> camera extrinsics
+        - get_camera_point_cloud(camera_name, max_depth, stride, frame, width, height) -> RGBD point cloud
+        - set_viewer_camera_mode(mode) -> request camera mode ('third_person'|'robot_eye'|'robot_eye_debug'|'toggle')
         - toggle_viewer_camera_mode() -> request camera toggle
+        - toggle_viewer_control_debug() -> toggle control debug overlay
+        - toggle_viewer_wasd_debug_mode() -> toggle WASD manual mode for debug camera
     """
     # Define sandboxed environment with limited access
     safe_globals = {
@@ -363,8 +465,16 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         "place_object": place_object,
         "get_grid_map": get_grid_map,
         "get_object_positions": get_object_positions,
+        "get_debug_camera_joint_position": get_debug_camera_joint_position,
+        "set_debug_camera_target_joint": set_debug_camera_target_joint,
+        "look_at_point": look_at_point,
+        "get_camera_intrinsics": get_camera_intrinsics,
+        "get_camera_extrinsics": get_camera_extrinsics,
+        "get_camera_point_cloud": get_camera_point_cloud,
         "set_viewer_camera_mode": set_viewer_camera_mode,
         "toggle_viewer_camera_mode": toggle_viewer_camera_mode,
+        "toggle_viewer_control_debug": toggle_viewer_control_debug,
+        "toggle_viewer_wasd_debug_mode": toggle_viewer_wasd_debug_mode,
     }
     exec(code, safe_globals)
     return safe_globals.get("RESULT")

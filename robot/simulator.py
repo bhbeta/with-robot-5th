@@ -82,12 +82,32 @@ class RobotConfig:
     CAM_AZIMUTH = 135
     CAM_ELEVATION = -25
     EYE_IN_HAND_CAMERA_NAME = "robot0_eye_in_hand"
+    DEBUG_CAMERA_NAME = "robot0_debug_head_camera"
     CAMERA_DEFAULT_WIDTH = 320
     CAMERA_DEFAULT_HEIGHT = 240
-    VIEWER_KEY_TOGGLE = glfw.KEY_V
-    VIEWER_KEY_TOGGLE_ALT = glfw.KEY_F6
-    VIEWER_KEY_THIRD_PERSON = glfw.KEY_F7
-    VIEWER_KEY_ROBOT_EYE = glfw.KEY_F8
+    DEBUG_CAMERA_PAN_JOINT_NAME = "robot0_debug_camera_pan_joint"
+    DEBUG_CAMERA_TILT_JOINT_NAME = "robot0_debug_camera_tilt_joint"
+    DEBUG_CAMERA_PAN_ACTUATOR_NAME = "robot0_debug_camera_pan_actuator"
+    DEBUG_CAMERA_TILT_ACTUATOR_NAME = "robot0_debug_camera_tilt_actuator"
+    DEBUG_CAMERA_PAN_BODY_NAME = "robot0_debug_camera_pan_link"
+    DEBUG_CAMERA_TILT_BODY_NAME = "robot0_debug_camera_tilt_link"
+    DEBUG_CAMERA_TILT_OFFSET_LOCAL = np.array([0.08, 0.0, 0.0])
+    DEBUG_CAMERA_DEFAULT_TARGET_JOINT = np.array([0.0, -0.15])
+    DEBUG_CAMERA_MANUAL_STEP_DEG = 3.0
+    DEBUG_CAMERA_CONVERGENCE_POS_THRESHOLD = 0.01
+    DEBUG_CAMERA_CONVERGENCE_VEL_THRESHOLD = 0.05
+    DEPTH_EPSILON = 1e-6
+    POINT_CLOUD_DEFAULT_STRIDE = 4
+    POINT_CLOUD_DEFAULT_MAX_DEPTH = 4.0
+    POINT_CLOUD_DEFAULT_FRAME = "world"
+    CAMERA_FRAME_CONVENTION = "opencv"
+    VIEWER_KEY_TOGGLE = glfw.KEY_F8
+    VIEWER_KEY_TOGGLE_WASD_DEBUG = glfw.KEY_F7
+    VIEWER_KEY_THIRD_PERSON = glfw.KEY_F9
+    VIEWER_KEY_ROBOT_EYE = glfw.KEY_F10
+    VIEWER_KEY_ROBOT_EYE_DEBUG = glfw.KEY_F11
+    VIEWER_KEY_TOGGLE_CONTROL_DEBUG = glfw.KEY_F12
+    VIEWER_ROBOT_EYE_DEBUG_DISTANCE = 0.35
 
     MOBILE_INIT_POSITION = np.array([-1.0, 1.0, 0.0])
     ARM_INIT_POSITION = np.array([-0.0114, -1.0319,  0.0488, -2.2575,  0.0673,  1.5234, 0.6759])
@@ -142,6 +162,50 @@ class MujocoSimulator:
         self.gripper_actuator_ids = [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
                                      for name in RobotConfig.GRIPPER_ACTUATOR_NAMES]
 
+        # Resolve debug camera pan/tilt rig IDs
+        self.debug_camera_joint_ids = [
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, RobotConfig.DEBUG_CAMERA_PAN_JOINT_NAME),
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, RobotConfig.DEBUG_CAMERA_TILT_JOINT_NAME),
+        ]
+        self.debug_camera_actuator_ids = [
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, RobotConfig.DEBUG_CAMERA_PAN_ACTUATOR_NAME),
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, RobotConfig.DEBUG_CAMERA_TILT_ACTUATOR_NAME),
+        ]
+        self.debug_camera_qpos_indices = [
+            self.model.jnt_qposadr[jid] for jid in self.debug_camera_joint_ids
+        ]
+        self.debug_camera_dof_indices = [
+            self.model.jnt_dofadr[jid] for jid in self.debug_camera_joint_ids
+        ]
+        self.debug_camera_joint_limits = np.array(
+            [self.model.jnt_range[jid] for jid in self.debug_camera_joint_ids],
+            dtype=float
+        )
+        self.debug_camera_pan_body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, RobotConfig.DEBUG_CAMERA_PAN_BODY_NAME
+        )
+        self.debug_camera_pan_parent_body_id = int(self.model.body_parentid[self.debug_camera_pan_body_id])
+        self.debug_camera_tilt_body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, RobotConfig.DEBUG_CAMERA_TILT_BODY_NAME
+        )
+        self.debug_camera_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_CAMERA, RobotConfig.DEBUG_CAMERA_NAME
+        )
+        for jid, name in zip(
+            self.debug_camera_joint_ids,
+            [RobotConfig.DEBUG_CAMERA_PAN_JOINT_NAME, RobotConfig.DEBUG_CAMERA_TILT_JOINT_NAME]
+        ):
+            self._require_valid_id(jid, name)
+        for aid, name in zip(
+            self.debug_camera_actuator_ids,
+            [RobotConfig.DEBUG_CAMERA_PAN_ACTUATOR_NAME, RobotConfig.DEBUG_CAMERA_TILT_ACTUATOR_NAME]
+        ):
+            self._require_valid_id(aid, name)
+        self._require_valid_id(self.debug_camera_pan_body_id, RobotConfig.DEBUG_CAMERA_PAN_BODY_NAME)
+        self._require_valid_id(self.debug_camera_tilt_body_id, RobotConfig.DEBUG_CAMERA_TILT_BODY_NAME)
+        self._require_valid_id(self.debug_camera_id, RobotConfig.DEBUG_CAMERA_NAME)
+        self._require_valid_id(self.debug_camera_pan_parent_body_id, f"{RobotConfig.DEBUG_CAMERA_PAN_BODY_NAME}_parent")
+
         # Resolve object IDs
         self.object_ids = []
         for i in range(self.model.nbody):
@@ -158,6 +222,16 @@ class MujocoSimulator:
         for i, (joint_id, actuator_id) in enumerate(zip(self.arm_joint_ids, self.arm_actuator_ids)):
             self.data.qpos[joint_id] = RobotConfig.ARM_INIT_POSITION[i]
             self.data.ctrl[actuator_id] = RobotConfig.ARM_INIT_POSITION[i]
+
+        # Initialize debug camera pan/tilt joint targets
+        self._debug_camera_target_joint = np.clip(
+            RobotConfig.DEBUG_CAMERA_DEFAULT_TARGET_JOINT.copy(),
+            self.debug_camera_joint_limits[:, 0],
+            self.debug_camera_joint_limits[:, 1],
+        )
+        for i, qpos_idx in enumerate(self.debug_camera_qpos_indices):
+            self.data.qpos[qpos_idx] = self._debug_camera_target_joint[i]
+            self.data.ctrl[self.debug_camera_actuator_ids[i]] = self._debug_camera_target_joint[i]
         
         # Initialize grid map
         self.grid_map = np.load("grid_map.npy")
@@ -179,9 +253,13 @@ class MujocoSimulator:
         )
         self._viewer_command_lock = threading.Lock()
         self._viewer_pending_camera_command: Optional[str] = None
+        self._viewer_show_control_debug = True
+        self._viewer_wasd_debug_enabled = False
+        self._viewer_overlay_update_period = 0.15
+        self._viewer_overlay_last_update_time = 0.0
 
     def _set_viewer_camera_mode(self, viewer: Any, mode: str) -> None:
-        """Apply viewer camera mode: 'third_person' (free cam) or 'robot_eye' (fixed eye-in-hand)."""
+        """Apply viewer camera mode."""
         if mode == "robot_eye":
             if self._eye_in_hand_camera_id < 0:
                 print(
@@ -194,6 +272,20 @@ class MujocoSimulator:
                 viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
                 viewer.cam.fixedcamid = self._eye_in_hand_camera_id
                 self._viewer_camera_mode = "robot_eye"
+                return
+        elif mode == "robot_eye_debug":
+            if self._eye_in_hand_camera_id < 0:
+                print(
+                    f"[VIEWER] '{RobotConfig.EYE_IN_HAND_CAMERA_NAME}' camera not found. "
+                    "Staying in third-person mode."
+                )
+                self._viewer_camera_mode = "third_person"
+                mode = "third_person"
+            else:
+                viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+                viewer.cam.distance = RobotConfig.VIEWER_ROBOT_EYE_DEBUG_DISTANCE
+                self._viewer_camera_mode = "robot_eye_debug"
+                self._update_robot_eye_debug_camera(viewer, force_distance=True)
                 return
 
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
@@ -210,22 +302,84 @@ class MujocoSimulator:
         if self._viewer_camera_mode == "robot_eye":
             print(
                 "[VIEWER] Camera mode: robot_eye "
-                f"({RobotConfig.EYE_IN_HAND_CAMERA_NAME}). Press 'V' or 'F6' to switch back."
+                f"({RobotConfig.EYE_IN_HAND_CAMERA_NAME}). Press 'F8' to switch back."
+            )
+        elif self._viewer_camera_mode == "robot_eye_debug":
+            print(
+                "[VIEWER] Camera mode: robot_eye_debug. "
+                "Mouse drag rotates view, but camera follows eye-in-hand."
             )
         else:
-            print("[VIEWER] Camera mode: third_person. Press 'V' or 'F6' to switch to robot_eye.")
+            print("[VIEWER] Camera mode: third_person. Press 'F8' to switch to robot_eye.")
+
+    def _format_control_debug_overlay(self) -> str:
+        """Build compact control debug text."""
+        mobile_pos = self.get_mobile_position()
+        mobile_target = self.get_mobile_target_position()
+        mobile_error = self.get_mobile_position_diff()
+        mobile_vel = self.get_mobile_velocity()
+
+        arm_error = self.get_arm_joint_diff()
+        arm_vel = self.get_arm_joint_velocity()
+
+        gripper_now = self.get_gripper_width()
+        gripper_target = self._gripper_target_width
+        cam_joint = self.get_debug_camera_joint_position()
+        cam_target = self.get_debug_camera_target_joint()
+        cam_error = self.get_debug_camera_joint_diff()
+
+        return (
+            f"base cur : [{mobile_pos[0]:+.2f}, {mobile_pos[1]:+.2f}, {mobile_pos[2]:+.2f}]\n"
+            f"base tgt : [{mobile_target[0]:+.2f}, {mobile_target[1]:+.2f}, {mobile_target[2]:+.2f}]\n"
+            f"base err : [{mobile_error[0]:+.2f}, {mobile_error[1]:+.2f}, {mobile_error[2]:+.2f}] "
+            f"| |e|={np.linalg.norm(mobile_error):.3f}\n"
+            f"base vel : |v|={np.linalg.norm(mobile_vel):.3f}\n"
+            f"arm err  : |e|={np.linalg.norm(arm_error):.3f}\n"
+            f"arm vel  : |v|={np.linalg.norm(arm_vel):.3f}\n"
+            f"gripper  : now={gripper_now:.3f}, tgt={gripper_target:.3f}\n"
+            f"cam pan/tilt cur: [{cam_joint[0]:+.2f}, {cam_joint[1]:+.2f}]\n"
+            f"cam pan/tilt tgt: [{cam_target[0]:+.2f}, {cam_target[1]:+.2f}] "
+            f"| |e|={np.linalg.norm(cam_error):.3f}"
+        )
 
     def _set_viewer_overlay(self, viewer: Any) -> None:
-        """Show viewer control shortcuts and current mode as an overlay."""
-        viewer.set_texts(
+        """Show viewer controls and optional control-debug overlay."""
+        texts = [
             (
                 None,
                 mujoco.mjtGridPos.mjGRID_TOPRIGHT,
                 "Viewer",
-                "F6: Toggle\nF7: Third person\nF8: Robot eye\n"
+                f"F7: WASD mode {'ON' if self._viewer_wasd_debug_enabled else 'OFF'}\n"
+                "F8: Toggle third <-> eye\n"
+                "F9: Third person\n"
+                "F10: Robot eye (fixed)\n"
+                "F11: Robot eye debug (free look)\n"
+                f"F12: Control debug {'ON' if self._viewer_show_control_debug else 'OFF'}\n"
+                "W/A/S/D: cam pan/tilt (when WASD mode ON)\n"
                 f"Mode: {self._viewer_camera_mode}",
             )
-        )
+        ]
+        if self._viewer_show_control_debug:
+            texts.append(
+                (
+                    None,
+                    mujoco.mjtGridPos.mjGRID_BOTTOMRIGHT,
+                    "Control Debug",
+                    self._format_control_debug_overlay(),
+                )
+            )
+        viewer.set_texts(texts)
+
+    def _update_robot_eye_debug_camera(self, viewer: Any, force_distance: bool = False) -> None:
+        """Keep free camera centered on eye-in-hand for mouse-look debugging."""
+        if self._eye_in_hand_camera_id < 0:
+            return
+        eye_pos = self.data.cam_xpos[self._eye_in_hand_camera_id]
+        viewer.cam.lookat[:] = eye_pos
+        if force_distance:
+            viewer.cam.distance = RobotConfig.VIEWER_ROBOT_EYE_DEBUG_DISTANCE
+        else:
+            viewer.cam.distance = max(viewer.cam.distance, 0.02)
 
     def _queue_viewer_camera_command(self, command: str) -> None:
         """Queue a viewer camera command to be applied in the simulation thread."""
@@ -246,22 +400,55 @@ class MujocoSimulator:
             "third_person": "third_person",
             "robot": "robot_eye",
             "robot_eye": "robot_eye",
+            "robot_eye_debug": "robot_eye_debug",
+            "debug": "robot_eye_debug",
+            "inspect": "robot_eye_debug",
             "eye": "robot_eye",
             "toggle": "toggle",
         }
         normalized = mode_alias.get(mode.strip().lower())
         if normalized is None:
-            raise ValueError("mode must be one of: third_person, robot_eye, toggle")
+            raise ValueError("mode must be one of: third_person, robot_eye, robot_eye_debug, toggle")
         self._queue_viewer_camera_command(normalized)
 
     def toggle_viewer_camera_mode(self) -> None:
         """Request camera toggle from any thread."""
         self._queue_viewer_camera_command("toggle")
 
+    def toggle_viewer_control_debug(self) -> None:
+        """Toggle control debug overlay from any thread."""
+        self._queue_viewer_camera_command("toggle_control_debug")
+
+    def toggle_viewer_wasd_debug_mode(self) -> None:
+        """Toggle WASD debug-camera input mode from any thread."""
+        self._queue_viewer_camera_command("toggle_wasd_debug")
+
     def _apply_viewer_camera_command(self, viewer: Any, command: str) -> None:
         """Apply queued command on viewer state."""
         if command == "toggle":
             self._toggle_viewer_camera_mode(viewer)
+            return
+        if command == "toggle_control_debug":
+            self._viewer_show_control_debug = not self._viewer_show_control_debug
+            status = "ON" if self._viewer_show_control_debug else "OFF"
+            print(f"[VIEWER] Control debug overlay: {status}.")
+            return
+        if command == "toggle_wasd_debug":
+            self._viewer_wasd_debug_enabled = not self._viewer_wasd_debug_enabled
+            status = "ON" if self._viewer_wasd_debug_enabled else "OFF"
+            print(f"[VIEWER] WASD debug-camera mode: {status}.")
+            return
+        if command == "debug_cam_pan_left":
+            self._nudge_debug_camera_target(delta_pan=+np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
+            return
+        if command == "debug_cam_pan_right":
+            self._nudge_debug_camera_target(delta_pan=-np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
+            return
+        if command == "debug_cam_tilt_up":
+            self._nudge_debug_camera_target(delta_tilt=+np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
+            return
+        if command == "debug_cam_tilt_down":
+            self._nudge_debug_camera_target(delta_tilt=-np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
             return
         self._set_viewer_camera_mode(viewer, command)
         if self._viewer_camera_mode == "robot_eye":
@@ -269,6 +456,8 @@ class MujocoSimulator:
                 "[VIEWER] Camera mode: robot_eye "
                 f"({RobotConfig.EYE_IN_HAND_CAMERA_NAME})."
             )
+        elif self._viewer_camera_mode == "robot_eye_debug":
+            print("[VIEWER] Camera mode: robot_eye_debug (free look following eye-in-hand).")
         else:
             print("[VIEWER] Camera mode: third_person.")
 
@@ -281,6 +470,111 @@ class MujocoSimulator:
         if joint_type in (mujoco.mjtJoint.mjJNT_SLIDE, mujoco.mjtJoint.mjJNT_HINGE):
             return 1
         raise ValueError(f"Unsupported joint type for joint_id {joint_id}")
+
+    @staticmethod
+    def _wrap_to_pi(value: float) -> float:
+        """Wrap angle to [-pi, pi]."""
+        return float(np.arctan2(np.sin(value), np.cos(value)))
+
+    @staticmethod
+    def _build_homogeneous(rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
+        """Build 4x4 homogeneous transform matrix."""
+        matrix = np.eye(4, dtype=float)
+        matrix[:3, :3] = rotation
+        matrix[:3, 3] = translation
+        return matrix
+
+    @staticmethod
+    def _camera_mujoco_to_opencv_rotation() -> np.ndarray:
+        """Rotation from MuJoCo camera frame to OpenCV-like camera frame."""
+        return np.array(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, -1.0],
+            ],
+            dtype=float,
+        )
+
+    def _require_valid_id(self, id_value: int, name: str) -> None:
+        """Raise a descriptive error if a MuJoCo name lookup failed."""
+        if id_value < 0:
+            raise ValueError(f"Required model element '{name}' was not found.")
+
+    def _resolve_camera_id(self, camera_name: Optional[str]) -> int:
+        """Resolve camera name to camera id."""
+        if not camera_name:
+            raise ValueError("camera_name is required for this operation")
+        cam_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+        if cam_id < 0:
+            raise ValueError(f"Unknown camera name: {camera_name}")
+        return cam_id
+
+    # ============================================================
+    # Debug Camera Rig Methods
+    # ============================================================
+
+    def get_debug_camera_joint_position(self) -> np.ndarray:
+        """Get current debug camera joint angles [pan, tilt] in radians."""
+        return np.array([self.data.qpos[idx] for idx in self.debug_camera_qpos_indices], dtype=float)
+
+    def get_debug_camera_target_joint(self) -> np.ndarray:
+        """Get current debug camera target angles [pan, tilt] in radians."""
+        return self._debug_camera_target_joint.copy()
+
+    def set_debug_camera_target_joint(self, target_joint: np.ndarray) -> None:
+        """Set debug camera target angles [pan, tilt] in radians."""
+        target = np.array(target_joint, dtype=float).reshape(-1)
+        if target.shape[0] != 2:
+            raise ValueError("target_joint must have shape [2] for [pan, tilt]")
+        clipped = np.clip(target, self.debug_camera_joint_limits[:, 0], self.debug_camera_joint_limits[:, 1])
+        self._debug_camera_target_joint[:] = clipped
+
+    def get_debug_camera_joint_diff(self) -> np.ndarray:
+        """Get debug camera joint errors [pan, tilt] in radians."""
+        diff = self._debug_camera_target_joint - self.get_debug_camera_joint_position()
+        diff[0] = self._wrap_to_pi(diff[0])  # pan wraps around naturally
+        return diff
+
+    def get_debug_camera_joint_velocity(self) -> np.ndarray:
+        """Get debug camera joint velocities [pan, tilt] in rad/s."""
+        return np.array([self.data.qvel[idx] for idx in self.debug_camera_dof_indices], dtype=float)
+
+    def _compute_debug_camera_control(self) -> np.ndarray:
+        """Compute debug camera control commands [pan, tilt]."""
+        return self._debug_camera_target_joint.copy()
+
+    def _nudge_debug_camera_target(self, delta_pan: float = 0.0, delta_tilt: float = 0.0) -> None:
+        """Increment debug camera target by small deltas."""
+        target = self.get_debug_camera_target_joint()
+        target[0] += delta_pan
+        target[1] += delta_tilt
+        self.set_debug_camera_target_joint(target)
+
+    def look_at_point(self, target_xyz: np.ndarray) -> np.ndarray:
+        """Set debug camera target so the rig looks at a world-space point."""
+        target = np.array(target_xyz, dtype=float).reshape(-1)
+        if target.shape[0] != 3:
+            raise ValueError("target_xyz must have shape [3] for [x, y, z]")
+
+        self._require_valid_id(self.debug_camera_pan_body_id, RobotConfig.DEBUG_CAMERA_PAN_BODY_NAME)
+
+        # Use pan-parent frame to compute desired yaw (pan).
+        pan_origin_world = self.data.xpos[self.debug_camera_pan_body_id].copy()
+        pan_parent_rot_world = self.data.xmat[self.debug_camera_pan_parent_body_id].reshape(3, 3).copy()
+        vec_world = target - pan_origin_world
+        vec_parent = pan_parent_rot_world.T @ vec_world
+        pan = np.arctan2(vec_parent[1], vec_parent[0])
+
+        # Tilt is computed in pan-rotated frame from tilt joint location.
+        pan_rot_local = R.from_euler("z", pan).as_matrix()
+        vec_after_pan = pan_rot_local.T @ vec_parent
+        vec_from_tilt = vec_after_pan - RobotConfig.DEBUG_CAMERA_TILT_OFFSET_LOCAL
+        tilt = np.arctan2(-vec_from_tilt[2], vec_from_tilt[0])
+
+        target_joint = np.array([pan, tilt], dtype=float)
+        self.set_debug_camera_target_joint(target_joint)
+        return self.get_debug_camera_target_joint()
     
     # ============================================================
     # Vision / Camera Methods
@@ -345,6 +639,26 @@ class MujocoSimulator:
             "cy": float(cy),
         }
 
+    def get_camera_extrinsics(self, camera_name: str) -> Dict[str, Any]:
+        """Return camera extrinsics for a named camera."""
+        cam_id = self._resolve_camera_id(camera_name)
+        cam_pos = self.data.cam_xpos[cam_id].copy()
+        rot_world_from_mujoco_cam = self.data.cam_xmat[cam_id].reshape(3, 3).copy()
+        rot_mujoco_cam_to_opencv = self._camera_mujoco_to_opencv_rotation()
+        rot_world_from_opencv_cam = rot_world_from_mujoco_cam @ rot_mujoco_cam_to_opencv
+
+        t_world_from_opencv = self._build_homogeneous(rot_world_from_opencv_cam, cam_pos)
+        t_opencv_from_world = np.linalg.inv(t_world_from_opencv)
+
+        return {
+            "camera_name": camera_name,
+            "frame_convention": RobotConfig.CAMERA_FRAME_CONVENTION,
+            "world_from_camera": t_world_from_opencv.tolist(),
+            "camera_from_world": t_opencv_from_world.tolist(),
+            "position_world": cam_pos.astype(float).tolist(),
+            "rotation_world_from_camera": rot_world_from_opencv_cam.astype(float).tolist(),
+        }
+
     def capture_camera_frame(
         self,
         width: int = RobotConfig.CAMERA_DEFAULT_WIDTH,
@@ -368,6 +682,89 @@ class MujocoSimulator:
                 renderer.disable_depth_rendering()
 
         return {"rgb": rgb, "depth": depth}
+
+    def get_camera_point_cloud(
+        self,
+        camera_name: str,
+        width: int = RobotConfig.CAMERA_DEFAULT_WIDTH,
+        height: int = RobotConfig.CAMERA_DEFAULT_HEIGHT,
+        max_depth: float = RobotConfig.POINT_CLOUD_DEFAULT_MAX_DEPTH,
+        stride: int = RobotConfig.POINT_CLOUD_DEFAULT_STRIDE,
+        frame: str = RobotConfig.POINT_CLOUD_DEFAULT_FRAME,
+    ) -> Dict[str, Any]:
+        """Generate RGBD point cloud from a named camera."""
+        if stride <= 0:
+            raise ValueError("stride must be a positive integer")
+        if frame not in ("world", "camera"):
+            raise ValueError("frame must be 'world' or 'camera'")
+
+        frame_data = self.capture_camera_frame(
+            width=width,
+            height=height,
+            camera_name=camera_name,
+            include_depth=True,
+        )
+        depth = frame_data["depth"]
+        rgb = frame_data["rgb"]
+        if depth is None:
+            raise ValueError("Depth rendering is not available for point cloud generation")
+
+        intrinsics = self.get_camera_intrinsics(width=width, height=height, camera_name=camera_name)
+        fx = intrinsics["fx"]
+        fy = intrinsics["fy"]
+        cx = intrinsics["cx"]
+        cy = intrinsics["cy"]
+
+        h, w = depth.shape
+        xs = np.arange(0, w, stride, dtype=np.int32)
+        ys = np.arange(0, h, stride, dtype=np.int32)
+        uu, vv = np.meshgrid(xs, ys)
+
+        sampled_depth = depth[vv, uu]
+        valid_mask = np.isfinite(sampled_depth) & (sampled_depth > RobotConfig.DEPTH_EPSILON)
+        if max_depth is not None and max_depth > 0:
+            valid_mask &= sampled_depth <= max_depth
+
+        if not np.any(valid_mask):
+            return {
+                "camera_name": camera_name,
+                "frame": frame,
+                "points": [],
+                "colors": [],
+                "num_points": 0,
+                "intrinsics": intrinsics,
+                "extrinsics": self.get_camera_extrinsics(camera_name),
+            }
+
+        z = sampled_depth[valid_mask].astype(np.float32)
+        u = uu[valid_mask].astype(np.float32)
+        v = vv[valid_mask].astype(np.float32)
+
+        x = ((u - cx) / fx) * z
+        y = ((v - cy) / fy) * z
+        points_camera = np.stack([x, y, z], axis=1).astype(np.float32)
+
+        sampled_rgb = rgb[vv, uu]
+        colors = sampled_rgb[valid_mask].astype(np.float32) / 255.0
+
+        extrinsics = self.get_camera_extrinsics(camera_name)
+        if frame == "camera":
+            points_out = points_camera
+        else:
+            world_from_camera = np.array(extrinsics["world_from_camera"], dtype=np.float64)
+            rot = world_from_camera[:3, :3]
+            trans = world_from_camera[:3, 3]
+            points_out = (rot @ points_camera.T).T + trans
+
+        return {
+            "camera_name": camera_name,
+            "frame": frame,
+            "points": points_out.astype(float).tolist(),
+            "colors": colors.astype(float).tolist(),
+            "num_points": int(points_out.shape[0]),
+            "intrinsics": intrinsics,
+            "extrinsics": extrinsics,
+        }
 
     # ============================================================
     # Mobile Base Control Methods
@@ -960,12 +1357,27 @@ class MujocoSimulator:
     def run(self) -> None:
         """Run simulation with 3D viewer and PD control loop (blocking)."""
         def key_callback(keycode: int) -> None:
-            if keycode in (RobotConfig.VIEWER_KEY_TOGGLE, RobotConfig.VIEWER_KEY_TOGGLE_ALT):
+            if keycode == RobotConfig.VIEWER_KEY_TOGGLE_WASD_DEBUG:
+                self._queue_viewer_camera_command("toggle_wasd_debug")
+            elif keycode == RobotConfig.VIEWER_KEY_TOGGLE:
                 self._queue_viewer_camera_command("toggle")
             elif keycode == RobotConfig.VIEWER_KEY_THIRD_PERSON:
                 self._queue_viewer_camera_command("third_person")
             elif keycode == RobotConfig.VIEWER_KEY_ROBOT_EYE:
                 self._queue_viewer_camera_command("robot_eye")
+            elif keycode == RobotConfig.VIEWER_KEY_ROBOT_EYE_DEBUG:
+                self._queue_viewer_camera_command("robot_eye_debug")
+            elif keycode == RobotConfig.VIEWER_KEY_TOGGLE_CONTROL_DEBUG:
+                self._queue_viewer_camera_command("toggle_control_debug")
+            elif self._viewer_wasd_debug_enabled:
+                if keycode == glfw.KEY_W:
+                    self._queue_viewer_camera_command("debug_cam_tilt_up")
+                elif keycode == glfw.KEY_S:
+                    self._queue_viewer_camera_command("debug_cam_tilt_down")
+                elif keycode == glfw.KEY_A:
+                    self._queue_viewer_camera_command("debug_cam_pan_left")
+                elif keycode == glfw.KEY_D:
+                    self._queue_viewer_camera_command("debug_cam_pan_right")
 
         with mujoco.viewer.launch_passive(self.model, self.data, key_callback=key_callback) as v:
             # Camera setup (default: third-person)
@@ -986,7 +1398,8 @@ class MujocoSimulator:
 
             print(
                 "[VIEWER] Camera hotkeys: "
-                "'V' or 'F6' toggle, 'F7' third_person, 'F8' robot_eye."
+                "'F7' WASD mode, 'F8' toggle, 'F9' third_person, 'F10' robot_eye, "
+                "'F11' robot_eye_debug, 'F12' control debug on/off."
             )
 
             # Main loop
@@ -996,6 +1409,7 @@ class MujocoSimulator:
                     with v.lock():
                         self._apply_viewer_camera_command(v, viewer_command)
                         self._set_viewer_overlay(v)
+                        self._viewer_overlay_last_update_time = time.time()
 
                 # mobile base control
                 mobile_control = self._compute_mobile_control()
@@ -1013,5 +1427,21 @@ class MujocoSimulator:
                 for i, actuator_id in enumerate(self.gripper_actuator_ids):
                     self.data.ctrl[actuator_id] = gripper_control[i]
 
+                # debug camera rig control
+                debug_cam_control = self._compute_debug_camera_control()
+                for i, actuator_id in enumerate(self.debug_camera_actuator_ids):
+                    self.data.ctrl[actuator_id] = debug_cam_control[i]
+
                 mujoco.mj_step(self.model, self.data)
+
+                if self._viewer_camera_mode == "robot_eye_debug":
+                    with v.lock():
+                        self._update_robot_eye_debug_camera(v)
+
+                now = time.time()
+                if now - self._viewer_overlay_last_update_time >= self._viewer_overlay_update_period:
+                    with v.lock():
+                        self._set_viewer_overlay(v)
+                    self._viewer_overlay_last_update_time = now
+
                 v.sync()
