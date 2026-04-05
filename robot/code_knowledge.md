@@ -80,6 +80,9 @@ Sets attached debug camera orientation target angles. Returns `True` if converge
 `reset_debug_camera_orientation(timeout=5.0, verbose=False)` -> `bool`
 Resets attached debug camera direction to home orientation.
 
+`upright_reset_debug_camera(timeout=5.0, verbose=False)` -> `bool`
+Resets attached debug camera to upright home view (`roll=0`) and home zoom.
+
 `get_debug_camera_zoom_fovy()` -> `float`
 Returns attached debug camera zoom as vertical FOV in degrees.
 
@@ -126,6 +129,10 @@ Viewer helper:
   - Arrow keys rotate camera left/right/up/down
   - `,` / `.` rotate camera roll
   - `+` / `-` zoom in/out
+  - `R` resets camera orientation
+  - `0` resets zoom
+  - `U` restores upright home view
+- Debug camera joints are stabilized kinematically each simulation step for low-shake vision debugging.
 - Attached debug camera controls affect only the debug camera rig, not mobile/arm/gripper APIs.
 
 `GET /vision/frame` query options:

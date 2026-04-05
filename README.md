@@ -58,6 +58,9 @@ The server will start on `http://0.0.0.0:8800` with:
   - `Arrow keys`: camera left/right/up/down while attached debug camera view is active
   - `,` / `.`: camera roll left/right while attached debug camera view is active
   - `+` / `-`: zoom in/out while attached debug camera view is active
+  - `R`: reset camera orientation while attached debug camera view is active
+  - `0`: reset zoom while attached debug camera view is active
+  - `U`: upright home view reset while attached debug camera view is active
   - Keyboard controls keep the same attached debug camera view and do not affect mobile/arm/gripper APIs
   - A separate attached debug camera control window opens for interactive control:
     - current view mode and camera angles
@@ -67,8 +70,10 @@ The server will start on `http://0.0.0.0:8800` with:
     - zoom in/out and zoom slider
     - reset camera direction button
     - reset zoom button
+    - upright home view reset button
     - third-person / hand-camera shortcuts
     - rotation/zoom step-size inputs and orientation sliders
+  - Attached debug camera orientation is stabilized kinematically each step to reduce shake in vision debugging
   - If tkinter is unavailable, compact on-screen status is used as fallback
 
 ## Usage

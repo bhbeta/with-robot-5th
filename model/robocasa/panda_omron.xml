@@ -273,22 +273,22 @@
 
                                 <body name="robot0_debug_camera_yaw_link" pos="0.040 0.000 0.045">
                                   <inertial pos="0 0 0" mass="0.03" diaginertia="0.0002 0.0002 0.0002"/>
-                                  <joint name="robot0_debug_camera_yaw_joint" pos="0 0 0" axis="0 0 1" type="hinge" limited="true" range="-3.1416 3.1416" damping="1.2" frictionloss="0.01"/>
+                                  <joint name="robot0_debug_camera_yaw_joint" pos="0 0 0" axis="0 0 1" type="hinge" limited="true" range="-3.1416 3.1416" damping="8.0" frictionloss="0.20" armature="0.05"/>
                                   <geom name="robot0_debug_camera_yaw_disk" type="cylinder" size="0.026 0.009" group="1" contype="0" conaffinity="0" rgba="0.10 0.10 0.12 1"/>
                                   <geom name="robot0_debug_camera_yaw_arm" type="capsule" fromto="0 0 0 0.040 0 0" size="0.007" group="1" contype="0" conaffinity="0" rgba="0.53 0.53 0.58 1"/>
 
                                   <body name="robot0_debug_camera_pitch_link" pos="0.040 0 0">
                                     <inertial pos="0 0 0" mass="0.025" diaginertia="0.00015 0.00015 0.00015"/>
-                                    <joint name="robot0_debug_camera_pitch_joint" pos="0 0 0" axis="0 1 0" type="hinge" limited="true" range="-1.35 1.20" damping="1.1" frictionloss="0.01"/>
+                                    <joint name="robot0_debug_camera_pitch_joint" pos="0 0 0" axis="0 1 0" type="hinge" limited="true" range="-1.35 1.20" damping="8.0" frictionloss="0.20" armature="0.05"/>
                                     <geom name="robot0_debug_camera_pitch_housing" type="box" size="0.022 0.018 0.018" group="1" contype="0" conaffinity="0" rgba="0.09 0.09 0.11 1"/>
 
                                     <body name="robot0_debug_camera_roll_link" pos="0.028 0 0">
                                       <inertial pos="0 0 0" mass="0.02" diaginertia="0.0001 0.0001 0.0001"/>
-                                      <joint name="robot0_debug_camera_roll_joint" pos="0 0 0" axis="1 0 0" type="hinge" limited="true" range="-1.57 1.57" damping="0.8" frictionloss="0.008"/>
+                                      <joint name="robot0_debug_camera_roll_joint" pos="0 0 0" axis="1 0 0" type="hinge" limited="true" range="-1.57 1.57" damping="7.0" frictionloss="0.15" armature="0.04"/>
                                       <geom name="robot0_debug_camera_roll_ring" type="cylinder" size="0.015 0.010" quat="0.707107 0 0.707107 0" group="1" contype="0" conaffinity="0" rgba="0.12 0.12 0.14 1"/>
                                       <geom name="robot0_debug_camera_housing" type="box" pos="0.022 0 0" size="0.023 0.018 0.015" group="1" contype="0" conaffinity="0" rgba="0.08 0.08 0.10 1"/>
                                       <geom name="robot0_debug_camera_lens" type="cylinder" pos="0.044 0 0" size="0.0115 0.016" quat="0.707107 0 0.707107 0" group="1" contype="0" conaffinity="0" rgba="0.05 0.46 0.46 1"/>
-                                      <camera name="robot0_debug_head_camera" pos="0.050 0 0" quat="0.707107 0 -0.707107 0" fovy="65"/>
+                                      <camera name="robot0_debug_head_camera" pos="0.050 0 0" quat="0.564721 0.425547 -0.564721 -0.425547" fovy="65"/>
                                     </body>
                                   </body>
                                 </body>

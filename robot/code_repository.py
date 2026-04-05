@@ -353,6 +353,26 @@ def reset_debug_camera_orientation(
     return converged
 
 
+def upright_reset_debug_camera(
+    timeout: float = 5.0,
+    verbose: bool = False
+) -> bool:
+    """Reset attached debug camera to stable upright home view."""
+    simulator.upright_reset_debug_camera()
+    if timeout <= 0:
+        return True
+    converged = _wait_for_convergence(
+        simulator.get_debug_camera_joint_diff,
+        simulator.get_debug_camera_joint_velocity,
+        pos_threshold=0.01,
+        vel_threshold=0.05,
+        timeout=timeout,
+        stable_frames=3,
+        verbose=verbose
+    )
+    return converged
+
+
 def get_debug_camera_zoom_fovy() -> float:
     """Get attached debug camera zoom (vertical FOV in degrees)."""
     return simulator.get_debug_camera_zoom_fovy()
@@ -497,6 +517,7 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         - get_debug_camera_joint_position() -> [left_right, up_down, roll] in radians
         - set_debug_camera_target_joint(target_joint, timeout, verbose) -> move attached debug camera direction
         - reset_debug_camera_orientation(timeout, verbose) -> reset attached debug camera direction
+        - upright_reset_debug_camera(timeout, verbose) -> reset attached debug camera to upright home view
         - get_debug_camera_zoom_fovy() -> attached debug camera zoom (FOV in degrees)
         - set_debug_camera_zoom_fovy(fovy_deg) -> set attached debug camera zoom (FOV in degrees)
         - reset_debug_camera_zoom() -> reset attached debug camera zoom
@@ -542,6 +563,7 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         "get_debug_camera_joint_position": get_debug_camera_joint_position,
         "set_debug_camera_target_joint": set_debug_camera_target_joint,
         "reset_debug_camera_orientation": reset_debug_camera_orientation,
+        "upright_reset_debug_camera": upright_reset_debug_camera,
         "get_debug_camera_zoom_fovy": get_debug_camera_zoom_fovy,
         "set_debug_camera_zoom_fovy": set_debug_camera_zoom_fovy,
         "reset_debug_camera_zoom": reset_debug_camera_zoom,

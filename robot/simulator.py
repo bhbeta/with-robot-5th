@@ -113,6 +113,8 @@ class RobotConfig:
     DEBUG_CAMERA_MANUAL_STEP_DEG = 3.0
     DEBUG_CAMERA_CONVERGENCE_POS_THRESHOLD = 0.01
     DEBUG_CAMERA_CONVERGENCE_VEL_THRESHOLD = 0.05
+    DEBUG_CAMERA_ENABLE_KINEMATIC_STABILIZATION = True
+    DEBUG_CAMERA_STABILIZATION_RECOMPUTE_FORWARD = True
     DEPTH_EPSILON = 1e-6
     POINT_CLOUD_DEFAULT_STRIDE = 4
     POINT_CLOUD_DEFAULT_MAX_DEPTH = 4.0
@@ -143,6 +145,9 @@ class RobotConfig:
     VIEWER_KEY_DEBUG_CAMERA_ZOOM_OUT = glfw.KEY_MINUS
     VIEWER_KEY_DEBUG_CAMERA_ROLL_LEFT = glfw.KEY_COMMA
     VIEWER_KEY_DEBUG_CAMERA_ROLL_RIGHT = glfw.KEY_PERIOD
+    VIEWER_KEY_DEBUG_CAMERA_RESET_ORIENTATION = glfw.KEY_R
+    VIEWER_KEY_DEBUG_CAMERA_UPRIGHT_HOME = glfw.KEY_U
+    VIEWER_KEY_DEBUG_CAMERA_RESET_ZOOM = glfw.KEY_0
     VIEWER_ROBOT_EYE_DEBUG_DISTANCE = 0.35
     VIEWER_FN_KEY_DEBOUNCE_SEC = 0.20
     VIEWER_ARROW_KEY_REPEAT_SEC = 0.03
@@ -307,10 +312,7 @@ class MujocoSimulator:
         mujoco.mj_forward(self.model, self.data)
         try:
             self.look_at_point(RobotConfig.DEBUG_CAMERA_DEFAULT_LOOK_AT_WORLD)
-            for i, qpos_idx in enumerate(self.debug_camera_qpos_indices):
-                self.data.qpos[qpos_idx] = self._debug_camera_target_joint[i]
-                self.data.ctrl[self.debug_camera_actuator_ids[i]] = self._debug_camera_target_joint[i]
-            mujoco.mj_forward(self.model, self.data)
+            self._apply_debug_camera_stabilization(recompute_kinematics=True)
         except ValueError:
             # Keep the default joint target if look-at target cannot be resolved.
             pass
@@ -442,7 +444,7 @@ class MujocoSimulator:
             lines.append(f"Camera up/down: {up_down_deg:+.1f} deg")
             lines.append(f"Camera roll: {roll_deg:+.1f} deg")
             lines.append(f"Zoom (FOV): {self.get_debug_camera_zoom_fovy():.1f} deg")
-        lines.append("F7 view  Arrows rotate  ,/. roll  +/- zoom")
+        lines.append("F7 view  Arrows rotate  ,/. roll  +/- zoom  U upright")
         return "\n".join(lines)
 
     @staticmethod
@@ -463,6 +465,9 @@ class MujocoSimulator:
             "Up/Down    : Camera up/down\n"
             ", / .      : Camera roll left/right\n"
             "+ / -      : Zoom in/out\n"
+            "R          : Reset camera orientation\n"
+            "0          : Reset zoom\n"
+            "U          : Upright home view\n"
             "\n"
             "Note: Attached debug camera controls do not change\n"
             "mobile base, arm, or gripper APIs."
@@ -538,6 +543,18 @@ class MujocoSimulator:
         fovy = self.reset_debug_camera_zoom()
         return {
             "orientation": orientation.astype(float).tolist(),
+            "fov_y_deg": float(fovy),
+        }
+
+    def upright_reset_debug_camera(self) -> Dict[str, Any]:
+        """Restore stable, upright home view for attached debug camera."""
+        self.look_at_debug_camera_home_target()
+        target = self.get_debug_camera_target_joint()
+        target[2] = 0.0
+        self.set_debug_camera_target_joint(target)
+        fovy = self.reset_debug_camera_zoom()
+        return {
+            "orientation": self.get_debug_camera_target_joint().astype(float).tolist(),
             "fov_y_deg": float(fovy),
         }
 
@@ -746,7 +763,10 @@ class MujocoSimulator:
             row=20, column=2, columnspan=2, sticky="ew", pady=(8, 2)
         )
         ttk.Button(main, text="Look At Home Target", command=lambda: self._queue_viewer_camera_command("debug_cam_look_at_home_target")).grid(
-            row=21, column=0, columnspan=4, sticky="ew", pady=2
+            row=21, column=0, columnspan=2, sticky="ew", pady=2
+        )
+        ttk.Button(main, text="Upright Home View", command=lambda: self._queue_viewer_camera_command("debug_cam_upright_home")).grid(
+            row=21, column=2, columnspan=2, sticky="ew", pady=2
         )
 
         help_label = ttk.Label(
@@ -755,7 +775,8 @@ class MujocoSimulator:
                 "Shortcuts in attached debug camera view:\n"
                 "- Arrows: camera left/right/up/down\n"
                 "- Comma/Period: roll left/right\n"
-                "- Plus/Minus: zoom in/out"
+                "- Plus/Minus: zoom in/out\n"
+                "- R: reset camera, 0: reset zoom, U: upright home view"
             ),
             wraplength=390,
             justify="left",
@@ -996,6 +1017,9 @@ class MujocoSimulator:
         if command == "debug_cam_look_at_home_target":
             self.look_at_debug_camera_home_target()
             return
+        if command == "debug_cam_upright_home":
+            self.upright_reset_debug_camera()
+            return
 
         if self._is_attached_debug_camera_mode(command) and not self._is_attached_debug_camera_mode(self._viewer_camera_mode):
             self._viewer_mode_before_attached_debug = self._normalize_non_debug_restore_mode(
@@ -1091,6 +1115,21 @@ class MujocoSimulator:
     def _compute_debug_camera_control(self) -> np.ndarray:
         """Compute attached debug camera control commands [yaw, pitch, roll]."""
         return self._debug_camera_target_joint.copy()
+
+    def _apply_debug_camera_stabilization(self, recompute_kinematics: bool = False) -> None:
+        """Keep attached debug camera joints stable for usable vision debugging."""
+        clipped = np.clip(
+            self._debug_camera_target_joint,
+            self.debug_camera_joint_limits[:, 0],
+            self.debug_camera_joint_limits[:, 1],
+        )
+        self._debug_camera_target_joint[:] = clipped
+        for i, qpos_idx in enumerate(self.debug_camera_qpos_indices):
+            self.data.qpos[qpos_idx] = clipped[i]
+            self.data.qvel[self.debug_camera_dof_indices[i]] = 0.0
+            self.data.ctrl[self.debug_camera_actuator_ids[i]] = clipped[i]
+        if recompute_kinematics:
+            mujoco.mj_forward(self.model, self.data)
 
     def _nudge_debug_camera_target(
         self,
@@ -1998,6 +2037,18 @@ class MujocoSimulator:
                     if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_ARROW_KEY_REPEAT_SEC):
                         return
                     self._queue_viewer_camera_command("debug_cam_zoom_out")
+                elif keycode in (RobotConfig.VIEWER_KEY_DEBUG_CAMERA_RESET_ORIENTATION, ord("r"), ord("R")):
+                    if not self._accept_viewer_key(RobotConfig.VIEWER_KEY_DEBUG_CAMERA_RESET_ORIENTATION, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                        return
+                    self._queue_viewer_camera_command("debug_cam_reset_home")
+                elif keycode == RobotConfig.VIEWER_KEY_DEBUG_CAMERA_RESET_ZOOM:
+                    if not self._accept_viewer_key(RobotConfig.VIEWER_KEY_DEBUG_CAMERA_RESET_ZOOM, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                        return
+                    self._queue_viewer_camera_command("debug_cam_reset_zoom")
+                elif keycode in (RobotConfig.VIEWER_KEY_DEBUG_CAMERA_UPRIGHT_HOME, ord("u"), ord("U")):
+                    if not self._accept_viewer_key(RobotConfig.VIEWER_KEY_DEBUG_CAMERA_UPRIGHT_HOME, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                        return
+                    self._queue_viewer_camera_command("debug_cam_upright_home")
 
         try:
             with mujoco.viewer.launch_passive(self.model, self.data, key_callback=key_callback) as v:
@@ -2023,7 +2074,8 @@ class MujocoSimulator:
                     "'F7' attached_debug_camera_view on/off, 'F8' third<->hand_fixed, "
                     "'F9' third_person, 'F10' hand_camera_fixed, 'F11' hand_camera_inspect, "
                     "'F12' debug control window on/off, 'H' help; "
-                    "arrows rotate, ','/'.' roll, '+'/'-' zoom in attached debug camera view."
+                    "arrows rotate, ','/'.' roll, '+'/'-' zoom, 'R' reset, '0' zoom reset, 'U' upright home "
+                    "in attached debug camera view."
                 )
 
                 # Main loop
@@ -2057,6 +2109,10 @@ class MujocoSimulator:
                         self.data.ctrl[actuator_id] = debug_cam_control[i]
 
                     mujoco.mj_step(self.model, self.data)
+                    if RobotConfig.DEBUG_CAMERA_ENABLE_KINEMATIC_STABILIZATION:
+                        self._apply_debug_camera_stabilization(
+                            recompute_kinematics=RobotConfig.DEBUG_CAMERA_STABILIZATION_RECOMPUTE_FORWARD
+                        )
 
                     if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_HAND_CAMERA_INSPECT:
                         with v.lock():
