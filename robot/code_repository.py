@@ -305,6 +305,18 @@ def get_object_positions() -> Dict[str, Dict[str, Any]]:
     return objects
 
 
+def set_viewer_camera_mode(mode: str = "toggle") -> bool:
+    """Request viewer camera mode update: 'third_person', 'robot_eye', or 'toggle'."""
+    simulator.set_viewer_camera_mode(mode)
+    return True
+
+
+def toggle_viewer_camera_mode() -> bool:
+    """Toggle viewer camera mode."""
+    simulator.toggle_viewer_camera_mode()
+    return True
+
+
 def exec_code(code: str) -> Optional[Dict[str, Any]]:
     """
     Execute user code in sandboxed environment.
@@ -323,6 +335,8 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         - place_object(place_pos, approach_height, retract_height, return_to_home, timeout, verbose)
         - get_grid_map() -> grid map of the environment
         - get_object_positions() -> list of object dictionaries with id, name, position and orientation
+        - set_viewer_camera_mode(mode) -> request camera mode ('third_person'|'robot_eye'|'toggle')
+        - toggle_viewer_camera_mode() -> request camera toggle
     """
     # Define sandboxed environment with limited access
     safe_globals = {
@@ -349,6 +363,8 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         "place_object": place_object,
         "get_grid_map": get_grid_map,
         "get_object_positions": get_object_positions,
+        "set_viewer_camera_mode": set_viewer_camera_mode,
+        "toggle_viewer_camera_mode": toggle_viewer_camera_mode,
     }
     exec(code, safe_globals)
     return safe_globals.get("RESULT")

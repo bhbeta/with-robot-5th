@@ -47,6 +47,10 @@ python main.py
 The server will start on `http://0.0.0.0:8800` with:
 - Interactive API documentation at `http://localhost:8800/docs`
 - 3D MuJoCo viewer window for real-time visualization
+- Viewer camera hotkeys:
+  - `V` or `F6`: toggle third-person <-> robot eye-in-hand
+  - `F7`: force third-person
+  - `F8`: force robot eye-in-hand
 
 ## Usage
 

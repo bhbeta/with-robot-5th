@@ -3,6 +3,7 @@
 import time
 import threading
 import numpy as np
+import glfw
 import mujoco, mujoco.viewer
 from scipy.spatial.transform import Rotation as R
 from typing import Optional, List, Tuple, Dict, Any
@@ -80,8 +81,13 @@ class RobotConfig:
     CAM_DISTANCE = 7.5
     CAM_AZIMUTH = 135
     CAM_ELEVATION = -25
+    EYE_IN_HAND_CAMERA_NAME = "robot0_eye_in_hand"
     CAMERA_DEFAULT_WIDTH = 320
     CAMERA_DEFAULT_HEIGHT = 240
+    VIEWER_KEY_TOGGLE = glfw.KEY_V
+    VIEWER_KEY_TOGGLE_ALT = glfw.KEY_F6
+    VIEWER_KEY_THIRD_PERSON = glfw.KEY_F7
+    VIEWER_KEY_ROBOT_EYE = glfw.KEY_F8
 
     MOBILE_INIT_POSITION = np.array([-1.0, 1.0, 0.0])
     ARM_INIT_POSITION = np.array([-0.0114, -1.0319,  0.0488, -2.2575,  0.0673,  1.5234, 0.6759])
@@ -167,6 +173,104 @@ class MujocoSimulator:
         # Offscreen renderers for vision pipeline (cached by resolution)
         self._renderers: Dict[Tuple[int, int], mujoco.Renderer] = {}
         self._render_lock = threading.Lock()
+        self._viewer_camera_mode = "third_person"
+        self._eye_in_hand_camera_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_CAMERA, RobotConfig.EYE_IN_HAND_CAMERA_NAME
+        )
+        self._viewer_command_lock = threading.Lock()
+        self._viewer_pending_camera_command: Optional[str] = None
+
+    def _set_viewer_camera_mode(self, viewer: Any, mode: str) -> None:
+        """Apply viewer camera mode: 'third_person' (free cam) or 'robot_eye' (fixed eye-in-hand)."""
+        if mode == "robot_eye":
+            if self._eye_in_hand_camera_id < 0:
+                print(
+                    f"[VIEWER] '{RobotConfig.EYE_IN_HAND_CAMERA_NAME}' camera not found. "
+                    "Staying in third-person mode."
+                )
+                self._viewer_camera_mode = "third_person"
+                mode = "third_person"
+            else:
+                viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+                viewer.cam.fixedcamid = self._eye_in_hand_camera_id
+                self._viewer_camera_mode = "robot_eye"
+                return
+
+        viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+        viewer.cam.lookat[:] = RobotConfig.CAM_LOOKAT
+        viewer.cam.distance = RobotConfig.CAM_DISTANCE
+        viewer.cam.azimuth = RobotConfig.CAM_AZIMUTH
+        viewer.cam.elevation = RobotConfig.CAM_ELEVATION
+        self._viewer_camera_mode = "third_person"
+
+    def _toggle_viewer_camera_mode(self, viewer: Any) -> None:
+        """Toggle viewer camera between third-person and eye-in-hand views."""
+        next_mode = "robot_eye" if self._viewer_camera_mode == "third_person" else "third_person"
+        self._set_viewer_camera_mode(viewer, next_mode)
+        if self._viewer_camera_mode == "robot_eye":
+            print(
+                "[VIEWER] Camera mode: robot_eye "
+                f"({RobotConfig.EYE_IN_HAND_CAMERA_NAME}). Press 'V' or 'F6' to switch back."
+            )
+        else:
+            print("[VIEWER] Camera mode: third_person. Press 'V' or 'F6' to switch to robot_eye.")
+
+    def _set_viewer_overlay(self, viewer: Any) -> None:
+        """Show viewer control shortcuts and current mode as an overlay."""
+        viewer.set_texts(
+            (
+                None,
+                mujoco.mjtGridPos.mjGRID_TOPRIGHT,
+                "Viewer",
+                "F6: Toggle\nF7: Third person\nF8: Robot eye\n"
+                f"Mode: {self._viewer_camera_mode}",
+            )
+        )
+
+    def _queue_viewer_camera_command(self, command: str) -> None:
+        """Queue a viewer camera command to be applied in the simulation thread."""
+        with self._viewer_command_lock:
+            self._viewer_pending_camera_command = command
+
+    def _pop_viewer_camera_command(self) -> Optional[str]:
+        """Pop queued camera command if available."""
+        with self._viewer_command_lock:
+            command = self._viewer_pending_camera_command
+            self._viewer_pending_camera_command = None
+        return command
+
+    def set_viewer_camera_mode(self, mode: str) -> None:
+        """Request viewer camera mode change from any thread."""
+        mode_alias = {
+            "third": "third_person",
+            "third_person": "third_person",
+            "robot": "robot_eye",
+            "robot_eye": "robot_eye",
+            "eye": "robot_eye",
+            "toggle": "toggle",
+        }
+        normalized = mode_alias.get(mode.strip().lower())
+        if normalized is None:
+            raise ValueError("mode must be one of: third_person, robot_eye, toggle")
+        self._queue_viewer_camera_command(normalized)
+
+    def toggle_viewer_camera_mode(self) -> None:
+        """Request camera toggle from any thread."""
+        self._queue_viewer_camera_command("toggle")
+
+    def _apply_viewer_camera_command(self, viewer: Any, command: str) -> None:
+        """Apply queued command on viewer state."""
+        if command == "toggle":
+            self._toggle_viewer_camera_mode(viewer)
+            return
+        self._set_viewer_camera_mode(viewer, command)
+        if self._viewer_camera_mode == "robot_eye":
+            print(
+                "[VIEWER] Camera mode: robot_eye "
+                f"({RobotConfig.EYE_IN_HAND_CAMERA_NAME})."
+            )
+        else:
+            print("[VIEWER] Camera mode: third_person.")
 
     def _get_joint_dof_count(self, joint_id: int) -> int:
         joint_type = self.model.jnt_type[joint_id]
@@ -855,26 +959,44 @@ class MujocoSimulator:
 
     def run(self) -> None:
         """Run simulation with 3D viewer and PD control loop (blocking)."""
-        with mujoco.viewer.launch_passive(self.model, self.data) as v:
-            # Camera setup
-            v.cam.lookat[:] = RobotConfig.CAM_LOOKAT
-            v.cam.distance = RobotConfig.CAM_DISTANCE
-            v.cam.azimuth = RobotConfig.CAM_AZIMUTH
-            v.cam.elevation = RobotConfig.CAM_ELEVATION
+        def key_callback(keycode: int) -> None:
+            if keycode in (RobotConfig.VIEWER_KEY_TOGGLE, RobotConfig.VIEWER_KEY_TOGGLE_ALT):
+                self._queue_viewer_camera_command("toggle")
+            elif keycode == RobotConfig.VIEWER_KEY_THIRD_PERSON:
+                self._queue_viewer_camera_command("third_person")
+            elif keycode == RobotConfig.VIEWER_KEY_ROBOT_EYE:
+                self._queue_viewer_camera_command("robot_eye")
 
-            # Hide debug visuals
-            v.opt.geomgroup[0] = 0
-            v.opt.sitegroup[0] = v.opt.sitegroup[1] = v.opt.sitegroup[2] = 0
-            v.opt.flags[mujoco.mjtVisFlag.mjVIS_TRANSPARENT] = False
-            v.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = False
-            v.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = False
-            v.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTFORCE] = False
-            v.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTOBJ] = False
-            v.opt.frame = mujoco.mjtFrame.mjFRAME_NONE
-            v.opt.label = mujoco.mjtLabel.mjLABEL_NONE
+        with mujoco.viewer.launch_passive(self.model, self.data, key_callback=key_callback) as v:
+            # Camera setup (default: third-person)
+            with v.lock():
+                self._set_viewer_camera_mode(v, "third_person")
+                self._set_viewer_overlay(v)
+
+                # Hide debug visuals
+                v.opt.geomgroup[0] = 0
+                v.opt.sitegroup[0] = v.opt.sitegroup[1] = v.opt.sitegroup[2] = 0
+                v.opt.flags[mujoco.mjtVisFlag.mjVIS_TRANSPARENT] = False
+                v.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = False
+                v.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = False
+                v.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTFORCE] = False
+                v.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTOBJ] = False
+                v.opt.frame = mujoco.mjtFrame.mjFRAME_NONE
+                v.opt.label = mujoco.mjtLabel.mjLABEL_NONE
+
+            print(
+                "[VIEWER] Camera hotkeys: "
+                "'V' or 'F6' toggle, 'F7' third_person, 'F8' robot_eye."
+            )
 
             # Main loop
             while v.is_running():
+                viewer_command = self._pop_viewer_camera_command()
+                if viewer_command is not None:
+                    with v.lock():
+                        self._apply_viewer_camera_command(v, viewer_command)
+                        self._set_viewer_overlay(v)
+
                 # mobile base control
                 mobile_control = self._compute_mobile_control()
                 self.data.ctrl[self.mobile_actuator_ids[0]] = mobile_control[0]
