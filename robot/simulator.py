@@ -2,6 +2,7 @@
 
 import time
 import threading
+from collections import deque
 import numpy as np
 import glfw
 import mujoco, mujoco.viewer
@@ -91,7 +92,7 @@ class RobotConfig:
     DEBUG_CAMERA_TILT_ACTUATOR_NAME = "robot0_debug_camera_tilt_actuator"
     DEBUG_CAMERA_PAN_BODY_NAME = "robot0_debug_camera_pan_link"
     DEBUG_CAMERA_TILT_BODY_NAME = "robot0_debug_camera_tilt_link"
-    DEBUG_CAMERA_TILT_OFFSET_LOCAL = np.array([0.08, 0.0, 0.0])
+    DEBUG_CAMERA_TILT_OFFSET_LOCAL = np.array([0.09, 0.0, 0.0])
     DEBUG_CAMERA_DEFAULT_TARGET_JOINT = np.array([0.0, -0.15])
     DEBUG_CAMERA_MANUAL_STEP_DEG = 3.0
     DEBUG_CAMERA_CONVERGENCE_POS_THRESHOLD = 0.01
@@ -101,13 +102,24 @@ class RobotConfig:
     POINT_CLOUD_DEFAULT_MAX_DEPTH = 4.0
     POINT_CLOUD_DEFAULT_FRAME = "world"
     CAMERA_FRAME_CONVENTION = "opencv"
+    VIEWER_MODE_THIRD_PERSON = "third_person"
+    VIEWER_MODE_ROBOT_EYE_FIXED = "robot_eye_fixed"
+    VIEWER_MODE_ROBOT_EYE_INSPECT = "robot_eye_inspect"
+    VIEWER_MODE_DEBUG_CAMERA_MANUAL = "debug_camera_manual"
+    VIEWER_KEY_DEBUG_CAMERA_MANUAL_TOGGLE = glfw.KEY_F7
     VIEWER_KEY_TOGGLE = glfw.KEY_F8
-    VIEWER_KEY_TOGGLE_WASD_DEBUG = glfw.KEY_F7
     VIEWER_KEY_THIRD_PERSON = glfw.KEY_F9
     VIEWER_KEY_ROBOT_EYE = glfw.KEY_F10
     VIEWER_KEY_ROBOT_EYE_DEBUG = glfw.KEY_F11
     VIEWER_KEY_TOGGLE_CONTROL_DEBUG = glfw.KEY_F12
+    VIEWER_KEY_TOGGLE_HELP = glfw.KEY_H
+    VIEWER_KEY_DEBUG_CAMERA_PAN_LEFT = glfw.KEY_LEFT
+    VIEWER_KEY_DEBUG_CAMERA_PAN_RIGHT = glfw.KEY_RIGHT
+    VIEWER_KEY_DEBUG_CAMERA_TILT_UP = glfw.KEY_UP
+    VIEWER_KEY_DEBUG_CAMERA_TILT_DOWN = glfw.KEY_DOWN
     VIEWER_ROBOT_EYE_DEBUG_DISTANCE = 0.35
+    VIEWER_FN_KEY_DEBOUNCE_SEC = 0.20
+    VIEWER_ARROW_KEY_REPEAT_SEC = 0.03
 
     MOBILE_INIT_POSITION = np.array([-1.0, 1.0, 0.0])
     ARM_INIT_POSITION = np.array([-0.0114, -1.0319,  0.0488, -2.2575,  0.0673,  1.5234, 0.6759])
@@ -247,45 +259,60 @@ class MujocoSimulator:
         # Offscreen renderers for vision pipeline (cached by resolution)
         self._renderers: Dict[Tuple[int, int], mujoco.Renderer] = {}
         self._render_lock = threading.Lock()
-        self._viewer_camera_mode = "third_person"
+        self._viewer_camera_mode = RobotConfig.VIEWER_MODE_THIRD_PERSON
+        self._viewer_mode_before_manual = RobotConfig.VIEWER_MODE_THIRD_PERSON
         self._eye_in_hand_camera_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_CAMERA, RobotConfig.EYE_IN_HAND_CAMERA_NAME
         )
         self._viewer_command_lock = threading.Lock()
-        self._viewer_pending_camera_command: Optional[str] = None
-        self._viewer_show_control_debug = True
-        self._viewer_wasd_debug_enabled = False
+        self._viewer_pending_camera_commands = deque()
+        self._viewer_show_compact_status = True
+        self._viewer_show_extended_help = False
         self._viewer_overlay_update_period = 0.15
         self._viewer_overlay_last_update_time = 0.0
+        self._viewer_last_key_time: Dict[int, float] = {}
 
     def _set_viewer_camera_mode(self, viewer: Any, mode: str) -> None:
         """Apply viewer camera mode."""
-        if mode == "robot_eye":
+        if mode == RobotConfig.VIEWER_MODE_ROBOT_EYE_FIXED:
             if self._eye_in_hand_camera_id < 0:
                 print(
                     f"[VIEWER] '{RobotConfig.EYE_IN_HAND_CAMERA_NAME}' camera not found. "
                     "Staying in third-person mode."
                 )
-                self._viewer_camera_mode = "third_person"
-                mode = "third_person"
+                self._viewer_camera_mode = RobotConfig.VIEWER_MODE_THIRD_PERSON
+                mode = RobotConfig.VIEWER_MODE_THIRD_PERSON
             else:
                 viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
                 viewer.cam.fixedcamid = self._eye_in_hand_camera_id
-                self._viewer_camera_mode = "robot_eye"
+                self._viewer_camera_mode = RobotConfig.VIEWER_MODE_ROBOT_EYE_FIXED
                 return
-        elif mode == "robot_eye_debug":
+        elif mode == RobotConfig.VIEWER_MODE_ROBOT_EYE_INSPECT:
             if self._eye_in_hand_camera_id < 0:
                 print(
                     f"[VIEWER] '{RobotConfig.EYE_IN_HAND_CAMERA_NAME}' camera not found. "
                     "Staying in third-person mode."
                 )
-                self._viewer_camera_mode = "third_person"
-                mode = "third_person"
+                self._viewer_camera_mode = RobotConfig.VIEWER_MODE_THIRD_PERSON
+                mode = RobotConfig.VIEWER_MODE_THIRD_PERSON
             else:
                 viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
                 viewer.cam.distance = RobotConfig.VIEWER_ROBOT_EYE_DEBUG_DISTANCE
-                self._viewer_camera_mode = "robot_eye_debug"
+                self._viewer_camera_mode = RobotConfig.VIEWER_MODE_ROBOT_EYE_INSPECT
                 self._update_robot_eye_debug_camera(viewer, force_distance=True)
+                return
+        elif mode == RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL:
+            if self.debug_camera_id < 0:
+                print(
+                    f"[VIEWER] '{RobotConfig.DEBUG_CAMERA_NAME}' camera not found. "
+                    "Staying in third-person mode."
+                )
+                self._viewer_camera_mode = RobotConfig.VIEWER_MODE_THIRD_PERSON
+                mode = RobotConfig.VIEWER_MODE_THIRD_PERSON
+            else:
+                viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+                viewer.cam.fixedcamid = self.debug_camera_id
+                self._viewer_camera_mode = RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL
                 return
 
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
@@ -293,82 +320,108 @@ class MujocoSimulator:
         viewer.cam.distance = RobotConfig.CAM_DISTANCE
         viewer.cam.azimuth = RobotConfig.CAM_AZIMUTH
         viewer.cam.elevation = RobotConfig.CAM_ELEVATION
-        self._viewer_camera_mode = "third_person"
+        self._viewer_camera_mode = RobotConfig.VIEWER_MODE_THIRD_PERSON
 
     def _toggle_viewer_camera_mode(self, viewer: Any) -> None:
         """Toggle viewer camera between third-person and eye-in-hand views."""
-        next_mode = "robot_eye" if self._viewer_camera_mode == "third_person" else "third_person"
+        next_mode = (
+            RobotConfig.VIEWER_MODE_ROBOT_EYE_FIXED
+            if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_THIRD_PERSON
+            else RobotConfig.VIEWER_MODE_THIRD_PERSON
+        )
         self._set_viewer_camera_mode(viewer, next_mode)
-        if self._viewer_camera_mode == "robot_eye":
+        if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_ROBOT_EYE_FIXED:
             print(
-                "[VIEWER] Camera mode: robot_eye "
+                "[VIEWER] Mode: robot_eye_fixed "
                 f"({RobotConfig.EYE_IN_HAND_CAMERA_NAME}). Press 'F8' to switch back."
             )
-        elif self._viewer_camera_mode == "robot_eye_debug":
+        elif self._viewer_camera_mode == RobotConfig.VIEWER_MODE_ROBOT_EYE_INSPECT:
             print(
-                "[VIEWER] Camera mode: robot_eye_debug. "
+                "[VIEWER] Mode: robot_eye_inspect. "
                 "Mouse drag rotates view, but camera follows eye-in-hand."
             )
+        elif self._viewer_camera_mode == RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL:
+            print(
+                f"[VIEWER] Mode: debug_camera_manual ({RobotConfig.DEBUG_CAMERA_NAME}). "
+                "Use arrow keys for pan/tilt."
+            )
         else:
-            print("[VIEWER] Camera mode: third_person. Press 'F8' to switch to robot_eye.")
+            print("[VIEWER] Mode: third_person. Press 'F8' to switch to robot_eye_fixed.")
 
-    def _format_control_debug_overlay(self) -> str:
-        """Build compact control debug text."""
-        mobile_pos = self.get_mobile_position()
-        mobile_target = self.get_mobile_target_position()
-        mobile_error = self.get_mobile_position_diff()
-        mobile_vel = self.get_mobile_velocity()
+    def _viewer_mode_human_label(self) -> str:
+        """Human-readable label for the current viewer mode."""
+        labels = {
+            RobotConfig.VIEWER_MODE_THIRD_PERSON: "third-person",
+            RobotConfig.VIEWER_MODE_ROBOT_EYE_FIXED: "hand camera (fixed)",
+            RobotConfig.VIEWER_MODE_ROBOT_EYE_INSPECT: "hand camera (free inspect)",
+            RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL: "attached debug camera (manual control)",
+        }
+        return labels.get(self._viewer_camera_mode, self._viewer_camera_mode)
 
-        arm_error = self.get_arm_joint_diff()
-        arm_vel = self.get_arm_joint_velocity()
-
-        gripper_now = self.get_gripper_width()
-        gripper_target = self._gripper_target_width
-        cam_joint = self.get_debug_camera_joint_position()
-        cam_target = self.get_debug_camera_target_joint()
-        cam_error = self.get_debug_camera_joint_diff()
-
+    def _build_compact_status_text(self) -> str:
+        """Small always-on status block."""
+        manual_on = self._viewer_camera_mode == RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL
         return (
-            f"base cur : [{mobile_pos[0]:+.2f}, {mobile_pos[1]:+.2f}, {mobile_pos[2]:+.2f}]\n"
-            f"base tgt : [{mobile_target[0]:+.2f}, {mobile_target[1]:+.2f}, {mobile_target[2]:+.2f}]\n"
-            f"base err : [{mobile_error[0]:+.2f}, {mobile_error[1]:+.2f}, {mobile_error[2]:+.2f}] "
-            f"| |e|={np.linalg.norm(mobile_error):.3f}\n"
-            f"base vel : |v|={np.linalg.norm(mobile_vel):.3f}\n"
-            f"arm err  : |e|={np.linalg.norm(arm_error):.3f}\n"
-            f"arm vel  : |v|={np.linalg.norm(arm_vel):.3f}\n"
-            f"gripper  : now={gripper_now:.3f}, tgt={gripper_target:.3f}\n"
-            f"cam pan/tilt cur: [{cam_joint[0]:+.2f}, {cam_joint[1]:+.2f}]\n"
-            f"cam pan/tilt tgt: [{cam_target[0]:+.2f}, {cam_target[1]:+.2f}] "
-            f"| |e|={np.linalg.norm(cam_error):.3f}"
+            f"View mode: {self._viewer_mode_human_label()}\n"
+            f"Debug camera control: {'ON' if manual_on else 'OFF'}\n"
+            "F7: debug camera control  F12: status  H: help"
+        )
+
+    @staticmethod
+    def _build_extended_help_text() -> str:
+        """Extended help text (hidden by default)."""
+        return (
+            "Camera/view controls\n"
+            "F7  : Toggle attached debug camera control\n"
+            "F8  : Quick toggle third-person <-> hand camera (fixed)\n"
+            "F9  : Third-person view\n"
+            "F10 : Hand camera (fixed)\n"
+            "F11 : Hand camera (free inspect)\n"
+            "F12 : Toggle compact status\n"
+            "H   : Toggle this help\n"
+            "\n"
+            "When debug camera control is ON\n"
+            "Left/Right : Camera left/right\n"
+            "Up/Down    : Camera up/down"
         )
 
     def _set_viewer_overlay(self, viewer: Any) -> None:
-        """Show viewer controls and optional control-debug overlay."""
-        texts = [
-            (
-                None,
-                mujoco.mjtGridPos.mjGRID_TOPRIGHT,
-                "Viewer",
-                f"F7: WASD mode {'ON' if self._viewer_wasd_debug_enabled else 'OFF'}\n"
-                "F8: Toggle third <-> eye\n"
-                "F9: Third person\n"
-                "F10: Robot eye (fixed)\n"
-                "F11: Robot eye debug (free look)\n"
-                f"F12: Control debug {'ON' if self._viewer_show_control_debug else 'OFF'}\n"
-                "W/A/S/D: cam pan/tilt (when WASD mode ON)\n"
-                f"Mode: {self._viewer_camera_mode}",
+        """Show compact status and optional help overlay."""
+        texts: List[Tuple[Optional[int], Optional[int], Optional[str], Optional[str]]] = []
+
+        if self._viewer_show_compact_status:
+            texts.append(
+                (
+                    None,
+                    mujoco.mjtGridPos.mjGRID_TOPRIGHT,
+                    "Status",
+                    self._build_compact_status_text(),
+                )
             )
-        ]
-        if self._viewer_show_control_debug:
+
+        if self._viewer_show_extended_help:
             texts.append(
                 (
                     None,
                     mujoco.mjtGridPos.mjGRID_BOTTOMRIGHT,
-                    "Control Debug",
-                    self._format_control_debug_overlay(),
+                    "Help",
+                    self._build_extended_help_text(),
                 )
             )
-        viewer.set_texts(texts)
+
+        if texts:
+            viewer.set_texts(texts)
+        else:
+            viewer.clear_texts()
+
+    def _accept_viewer_key(self, keycode: int, cooldown_sec: float) -> bool:
+        """Debounce viewer key events to prevent rapid double-toggles."""
+        now = time.time()
+        last_time = self._viewer_last_key_time.get(keycode, 0.0)
+        if now - last_time < cooldown_sec:
+            return False
+        self._viewer_last_key_time[keycode] = now
+        return True
 
     def _update_robot_eye_debug_camera(self, viewer: Any, force_distance: bool = False) -> None:
         """Keep free camera centered on eye-in-hand for mouse-look debugging."""
@@ -384,31 +437,39 @@ class MujocoSimulator:
     def _queue_viewer_camera_command(self, command: str) -> None:
         """Queue a viewer camera command to be applied in the simulation thread."""
         with self._viewer_command_lock:
-            self._viewer_pending_camera_command = command
+            self._viewer_pending_camera_commands.append(command)
 
     def _pop_viewer_camera_command(self) -> Optional[str]:
         """Pop queued camera command if available."""
         with self._viewer_command_lock:
-            command = self._viewer_pending_camera_command
-            self._viewer_pending_camera_command = None
+            if not self._viewer_pending_camera_commands:
+                return None
+            command = self._viewer_pending_camera_commands.popleft()
         return command
 
     def set_viewer_camera_mode(self, mode: str) -> None:
         """Request viewer camera mode change from any thread."""
         mode_alias = {
-            "third": "third_person",
-            "third_person": "third_person",
-            "robot": "robot_eye",
-            "robot_eye": "robot_eye",
-            "robot_eye_debug": "robot_eye_debug",
-            "debug": "robot_eye_debug",
-            "inspect": "robot_eye_debug",
-            "eye": "robot_eye",
+            "third": RobotConfig.VIEWER_MODE_THIRD_PERSON,
+            "third_person": RobotConfig.VIEWER_MODE_THIRD_PERSON,
+            "robot": RobotConfig.VIEWER_MODE_ROBOT_EYE_FIXED,
+            "robot_eye": RobotConfig.VIEWER_MODE_ROBOT_EYE_FIXED,  # backward compatibility
+            "robot_eye_fixed": RobotConfig.VIEWER_MODE_ROBOT_EYE_FIXED,
+            "robot_eye_debug": RobotConfig.VIEWER_MODE_ROBOT_EYE_INSPECT,  # backward compatibility
+            "robot_eye_inspect": RobotConfig.VIEWER_MODE_ROBOT_EYE_INSPECT,
+            "debug": RobotConfig.VIEWER_MODE_ROBOT_EYE_INSPECT,
+            "inspect": RobotConfig.VIEWER_MODE_ROBOT_EYE_INSPECT,
+            "eye": RobotConfig.VIEWER_MODE_ROBOT_EYE_FIXED,
+            "debug_camera_manual": RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL,
+            "debug_camera_manual_mode": RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL,
             "toggle": "toggle",
         }
         normalized = mode_alias.get(mode.strip().lower())
         if normalized is None:
-            raise ValueError("mode must be one of: third_person, robot_eye, robot_eye_debug, toggle")
+            raise ValueError(
+                "mode must be one of: third_person, robot_eye_fixed, robot_eye_inspect, "
+                "debug_camera_manual, toggle"
+            )
         self._queue_viewer_camera_command(normalized)
 
     def toggle_viewer_camera_mode(self) -> None:
@@ -416,50 +477,88 @@ class MujocoSimulator:
         self._queue_viewer_camera_command("toggle")
 
     def toggle_viewer_control_debug(self) -> None:
-        """Toggle control debug overlay from any thread."""
-        self._queue_viewer_camera_command("toggle_control_debug")
+        """Backward-compatible alias for compact status toggle."""
+        self._queue_viewer_camera_command("toggle_compact_status")
 
-    def toggle_viewer_wasd_debug_mode(self) -> None:
-        """Toggle WASD debug-camera input mode from any thread."""
-        self._queue_viewer_camera_command("toggle_wasd_debug")
+    def toggle_viewer_compact_status(self) -> None:
+        """Toggle compact status overlay."""
+        self._queue_viewer_camera_command("toggle_compact_status")
+
+    def toggle_viewer_help(self) -> None:
+        """Toggle extended help overlay."""
+        self._queue_viewer_camera_command("toggle_help")
+
+    def toggle_viewer_debug_camera_manual_mode(self) -> None:
+        """Toggle explicit debug-camera manual pan/tilt mode."""
+        self._queue_viewer_camera_command("toggle_debug_camera_manual_mode")
 
     def _apply_viewer_camera_command(self, viewer: Any, command: str) -> None:
         """Apply queued command on viewer state."""
         if command == "toggle":
             self._toggle_viewer_camera_mode(viewer)
             return
-        if command == "toggle_control_debug":
-            self._viewer_show_control_debug = not self._viewer_show_control_debug
-            status = "ON" if self._viewer_show_control_debug else "OFF"
-            print(f"[VIEWER] Control debug overlay: {status}.")
+        if command == "toggle_compact_status":
+            self._viewer_show_compact_status = not self._viewer_show_compact_status
+            status = "ON" if self._viewer_show_compact_status else "OFF"
+            print(f"[VIEWER] Compact status: {status}.")
             return
-        if command == "toggle_wasd_debug":
-            self._viewer_wasd_debug_enabled = not self._viewer_wasd_debug_enabled
-            status = "ON" if self._viewer_wasd_debug_enabled else "OFF"
-            print(f"[VIEWER] WASD debug-camera mode: {status}.")
+        if command == "toggle_help":
+            self._viewer_show_extended_help = not self._viewer_show_extended_help
+            status = "ON" if self._viewer_show_extended_help else "OFF"
+            print(f"[VIEWER] Extended help: {status}.")
+            return
+        if command == "toggle_debug_camera_manual_mode":
+            if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL:
+                restore_mode = self._viewer_mode_before_manual
+                if restore_mode not in (
+                    RobotConfig.VIEWER_MODE_THIRD_PERSON,
+                    RobotConfig.VIEWER_MODE_ROBOT_EYE_FIXED,
+                    RobotConfig.VIEWER_MODE_ROBOT_EYE_INSPECT,
+                ):
+                    restore_mode = RobotConfig.VIEWER_MODE_THIRD_PERSON
+                self._set_viewer_camera_mode(viewer, restore_mode)
+                print(f"[VIEWER] Debug camera control: OFF. View mode: {self._viewer_mode_human_label()}.")
+            else:
+                self._viewer_mode_before_manual = self._viewer_camera_mode
+                self._set_viewer_camera_mode(viewer, RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL)
+                if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL:
+                    print("[VIEWER] Debug camera control: ON.")
+                else:
+                    print("[VIEWER] Debug camera control could not be enabled (camera unavailable).")
             return
         if command == "debug_cam_pan_left":
-            self._nudge_debug_camera_target(delta_pan=+np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
+            if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL:
+                self._nudge_debug_camera_target(delta_pan=+np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
             return
         if command == "debug_cam_pan_right":
-            self._nudge_debug_camera_target(delta_pan=-np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
+            if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL:
+                self._nudge_debug_camera_target(delta_pan=-np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
             return
         if command == "debug_cam_tilt_up":
-            self._nudge_debug_camera_target(delta_tilt=+np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
+            if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL:
+                self._nudge_debug_camera_target(delta_tilt=+np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
             return
         if command == "debug_cam_tilt_down":
-            self._nudge_debug_camera_target(delta_tilt=-np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
+            if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL:
+                self._nudge_debug_camera_target(delta_tilt=-np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
             return
+        if (
+            command == RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL
+            and self._viewer_camera_mode != RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL
+        ):
+            self._viewer_mode_before_manual = self._viewer_camera_mode
         self._set_viewer_camera_mode(viewer, command)
-        if self._viewer_camera_mode == "robot_eye":
+        if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_ROBOT_EYE_FIXED:
             print(
-                "[VIEWER] Camera mode: robot_eye "
+                "[VIEWER] Mode: robot_eye_fixed "
                 f"({RobotConfig.EYE_IN_HAND_CAMERA_NAME})."
             )
-        elif self._viewer_camera_mode == "robot_eye_debug":
-            print("[VIEWER] Camera mode: robot_eye_debug (free look following eye-in-hand).")
+        elif self._viewer_camera_mode == RobotConfig.VIEWER_MODE_ROBOT_EYE_INSPECT:
+            print("[VIEWER] Mode: robot_eye_inspect (free look following eye-in-hand).")
+        elif self._viewer_camera_mode == RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL:
+            print(f"[VIEWER] Mode: debug_camera_manual ({RobotConfig.DEBUG_CAMERA_NAME}).")
         else:
-            print("[VIEWER] Camera mode: third_person.")
+            print("[VIEWER] Mode: third_person.")
 
     def _get_joint_dof_count(self, joint_id: int) -> int:
         joint_type = self.model.jnt_type[joint_id]
@@ -1357,32 +1456,56 @@ class MujocoSimulator:
     def run(self) -> None:
         """Run simulation with 3D viewer and PD control loop (blocking)."""
         def key_callback(keycode: int) -> None:
-            if keycode == RobotConfig.VIEWER_KEY_TOGGLE_WASD_DEBUG:
-                self._queue_viewer_camera_command("toggle_wasd_debug")
+            if keycode == RobotConfig.VIEWER_KEY_DEBUG_CAMERA_MANUAL_TOGGLE:
+                if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                    return
+                self._queue_viewer_camera_command("toggle_debug_camera_manual_mode")
             elif keycode == RobotConfig.VIEWER_KEY_TOGGLE:
+                if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                    return
                 self._queue_viewer_camera_command("toggle")
             elif keycode == RobotConfig.VIEWER_KEY_THIRD_PERSON:
-                self._queue_viewer_camera_command("third_person")
+                if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                    return
+                self._queue_viewer_camera_command(RobotConfig.VIEWER_MODE_THIRD_PERSON)
             elif keycode == RobotConfig.VIEWER_KEY_ROBOT_EYE:
-                self._queue_viewer_camera_command("robot_eye")
+                if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                    return
+                self._queue_viewer_camera_command(RobotConfig.VIEWER_MODE_ROBOT_EYE_FIXED)
             elif keycode == RobotConfig.VIEWER_KEY_ROBOT_EYE_DEBUG:
-                self._queue_viewer_camera_command("robot_eye_debug")
+                if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                    return
+                self._queue_viewer_camera_command(RobotConfig.VIEWER_MODE_ROBOT_EYE_INSPECT)
             elif keycode == RobotConfig.VIEWER_KEY_TOGGLE_CONTROL_DEBUG:
-                self._queue_viewer_camera_command("toggle_control_debug")
-            elif self._viewer_wasd_debug_enabled:
-                if keycode == glfw.KEY_W:
+                if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                    return
+                self._queue_viewer_camera_command("toggle_compact_status")
+            elif keycode in (RobotConfig.VIEWER_KEY_TOGGLE_HELP, ord("h"), ord("H")):
+                if not self._accept_viewer_key(RobotConfig.VIEWER_KEY_TOGGLE_HELP, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                    return
+                self._queue_viewer_camera_command("toggle_help")
+            elif self._viewer_camera_mode == RobotConfig.VIEWER_MODE_DEBUG_CAMERA_MANUAL:
+                if keycode == RobotConfig.VIEWER_KEY_DEBUG_CAMERA_TILT_UP:
+                    if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_ARROW_KEY_REPEAT_SEC):
+                        return
                     self._queue_viewer_camera_command("debug_cam_tilt_up")
-                elif keycode == glfw.KEY_S:
+                elif keycode == RobotConfig.VIEWER_KEY_DEBUG_CAMERA_TILT_DOWN:
+                    if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_ARROW_KEY_REPEAT_SEC):
+                        return
                     self._queue_viewer_camera_command("debug_cam_tilt_down")
-                elif keycode == glfw.KEY_A:
+                elif keycode == RobotConfig.VIEWER_KEY_DEBUG_CAMERA_PAN_LEFT:
+                    if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_ARROW_KEY_REPEAT_SEC):
+                        return
                     self._queue_viewer_camera_command("debug_cam_pan_left")
-                elif keycode == glfw.KEY_D:
+                elif keycode == RobotConfig.VIEWER_KEY_DEBUG_CAMERA_PAN_RIGHT:
+                    if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_ARROW_KEY_REPEAT_SEC):
+                        return
                     self._queue_viewer_camera_command("debug_cam_pan_right")
 
         with mujoco.viewer.launch_passive(self.model, self.data, key_callback=key_callback) as v:
             # Camera setup (default: third-person)
             with v.lock():
-                self._set_viewer_camera_mode(v, "third_person")
+                self._set_viewer_camera_mode(v, RobotConfig.VIEWER_MODE_THIRD_PERSON)
                 self._set_viewer_overlay(v)
 
                 # Hide debug visuals
@@ -1398,8 +1521,9 @@ class MujocoSimulator:
 
             print(
                 "[VIEWER] Camera hotkeys: "
-                "'F7' WASD mode, 'F8' toggle, 'F9' third_person, 'F10' robot_eye, "
-                "'F11' robot_eye_debug, 'F12' control debug on/off."
+                "'F7' debug_camera_manual toggle, 'F8' quick toggle third<->eye_fixed, "
+                "'F9' third_person, 'F10' robot_eye_fixed, 'F11' robot_eye_inspect, "
+                "'F12' compact status, 'H' help; arrows pan/tilt only in manual mode."
             )
 
             # Main loop
@@ -1434,7 +1558,7 @@ class MujocoSimulator:
 
                 mujoco.mj_step(self.model, self.data)
 
-                if self._viewer_camera_mode == "robot_eye_debug":
+                if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_ROBOT_EYE_INSPECT:
                     with v.lock():
                         self._update_robot_eye_debug_camera(v)
 

@@ -388,7 +388,7 @@ def get_camera_point_cloud(
 
 
 def set_viewer_camera_mode(mode: str = "toggle") -> bool:
-    """Request viewer camera mode update: 'third_person', 'robot_eye', 'robot_eye_debug', or 'toggle'."""
+    """Request viewer camera mode update: third_person/robot_eye_fixed/robot_eye_inspect/debug_camera_manual/toggle."""
     simulator.set_viewer_camera_mode(mode)
     return True
 
@@ -400,14 +400,26 @@ def toggle_viewer_camera_mode() -> bool:
 
 
 def toggle_viewer_control_debug() -> bool:
-    """Toggle control debug overlay on the viewer."""
+    """Backward-compatible alias for compact viewer status toggle."""
     simulator.toggle_viewer_control_debug()
     return True
 
 
-def toggle_viewer_wasd_debug_mode() -> bool:
-    """Toggle WASD manual control mode for debug camera rig in viewer."""
-    simulator.toggle_viewer_wasd_debug_mode()
+def toggle_viewer_compact_status() -> bool:
+    """Toggle compact viewer status overlay."""
+    simulator.toggle_viewer_compact_status()
+    return True
+
+
+def toggle_viewer_help() -> bool:
+    """Toggle extended viewer help overlay."""
+    simulator.toggle_viewer_help()
+    return True
+
+
+def toggle_viewer_debug_camera_manual_mode() -> bool:
+    """Toggle explicit manual pan/tilt mode for debug camera rig in viewer."""
+    simulator.toggle_viewer_debug_camera_manual_mode()
     return True
 
 
@@ -435,10 +447,12 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         - get_camera_intrinsics(camera_name, width, height) -> camera intrinsics
         - get_camera_extrinsics(camera_name) -> camera extrinsics
         - get_camera_point_cloud(camera_name, max_depth, stride, frame, width, height) -> RGBD point cloud
-        - set_viewer_camera_mode(mode) -> request camera mode ('third_person'|'robot_eye'|'robot_eye_debug'|'toggle')
+        - set_viewer_camera_mode(mode) -> request camera mode ('third_person'|'robot_eye_fixed'|'robot_eye_inspect'|'debug_camera_manual'|'toggle')
         - toggle_viewer_camera_mode() -> request camera toggle
-        - toggle_viewer_control_debug() -> toggle control debug overlay
-        - toggle_viewer_wasd_debug_mode() -> toggle WASD manual mode for debug camera
+        - toggle_viewer_control_debug() -> legacy alias for compact status toggle
+        - toggle_viewer_compact_status() -> toggle compact status overlay
+        - toggle_viewer_help() -> toggle extended help overlay
+        - toggle_viewer_debug_camera_manual_mode() -> toggle explicit debug-camera manual mode
     """
     # Define sandboxed environment with limited access
     safe_globals = {
@@ -474,7 +488,9 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         "set_viewer_camera_mode": set_viewer_camera_mode,
         "toggle_viewer_camera_mode": toggle_viewer_camera_mode,
         "toggle_viewer_control_debug": toggle_viewer_control_debug,
-        "toggle_viewer_wasd_debug_mode": toggle_viewer_wasd_debug_mode,
+        "toggle_viewer_compact_status": toggle_viewer_compact_status,
+        "toggle_viewer_help": toggle_viewer_help,
+        "toggle_viewer_debug_camera_manual_mode": toggle_viewer_debug_camera_manual_mode,
     }
     exec(code, safe_globals)
     return safe_globals.get("RESULT")

@@ -96,8 +96,12 @@ Generates point cloud from RGB+depth:
 - `num_points`: number of valid points
 
 Viewer helper:
-- `toggle_viewer_wasd_debug_mode()` toggles WASD manual mode (W/A/S/D pan-tilt nudge).
-- Manual keys apply only when that mode is ON.
+- `toggle_viewer_debug_camera_manual_mode()` toggles explicit manual mode for debug camera rig.
+- `toggle_viewer_compact_status()` toggles compact status overlay.
+- `toggle_viewer_help()` toggles extended help overlay.
+- Compact status is shown by default; extended help is hidden by default.
+- In manual mode, arrow keys nudge pan/tilt.
+- Manual mode affects only the debug camera rig, not mobile/arm/gripper APIs.
 
 `GET /vision/frame` query options:
 - `width`, `height`: positive integers (max `1280x720`)

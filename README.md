@@ -48,13 +48,16 @@ The server will start on `http://0.0.0.0:8800` with:
 - Interactive API documentation at `http://localhost:8800/docs`
 - 3D MuJoCo viewer window for real-time visualization
 - Viewer camera hotkeys:
-  - `F7`: toggle WASD debug-camera mode (manual pan/tilt)
+  - `F7`: toggle explicit debug-camera manual mode
   - `F8`: toggle third-person <-> robot eye-in-hand (fixed)
   - `F9`: force third-person
   - `F10`: force robot eye-in-hand (fixed camera)
-  - `F11`: robot-eye debug mode (free-look with mouse, camera follows eye-in-hand)
-  - `F12`: toggle control debug overlay (base/arm/gripper error & velocity)
-  - `W/A/S/D`: debug camera pan/tilt nudge (works only when WASD mode is ON)
+  - `F11`: hand-camera free inspect mode
+  - `F12`: toggle compact debug status
+  - `H`: toggle extended help
+  - `Arrow keys`: debug camera pan/tilt nudge (works only in debug-camera manual mode)
+  - Manual debug-camera mode affects only the debug camera rig, not mobile/arm/gripper APIs
+  - Default on-screen status is compact; detailed key help appears only when `H` is enabled
 
 ## Usage
 
