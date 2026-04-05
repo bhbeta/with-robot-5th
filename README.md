@@ -61,19 +61,25 @@ The server will start on `http://0.0.0.0:8800` with:
   - `R`: reset camera orientation while attached debug camera view is active
   - `0`: reset zoom while attached debug camera view is active
   - `U`: upright home view reset while attached debug camera view is active
+  - `Y`: flip camera direction by 180 degrees while attached debug camera view is active
+  - Control-window camera actions auto-switch viewer into attached debug camera view for live preview
+  - Control-window buttons and sliders share one simulator command-queue path (thread-safe control flow)
   - Keyboard controls keep the same attached debug camera view and do not affect mobile/arm/gripper APIs
   - A separate attached debug camera control window opens for interactive control:
     - current view mode and camera angles
     - current zoom (FOV)
+    - independent angle-step options for left/right/up/down (plus roll step), each up to 180 deg
     - camera left/right/up/down buttons
     - camera roll left/right controls
     - zoom in/out and zoom slider
     - reset camera direction button
     - reset zoom button
     - upright home view reset button
+    - flip direction 180 deg button
     - third-person / hand-camera shortcuts
     - rotation/zoom step-size inputs and orientation sliders
   - Attached debug camera orientation is stabilized kinematically each step to reduce shake in vision debugging
+  - Home orientation applies map-direction correction (about 180 deg) while keeping image upright
   - If tkinter is unavailable, compact on-screen status is used as fallback
 
 ## Usage

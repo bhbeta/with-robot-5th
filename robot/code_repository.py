@@ -333,6 +333,23 @@ def set_debug_camera_target_joint(
     return success
 
 
+def set_debug_camera_direction_steps(
+    left_deg: float,
+    right_deg: float,
+    up_deg: float,
+    down_deg: float,
+    roll_deg: float = 3.0,
+) -> Dict[str, float]:
+    """Set independent camera angle step sizes for left/right/up/down/roll controls (degrees)."""
+    return simulator.set_debug_camera_direction_steps_deg(
+        left=left_deg,
+        right=right_deg,
+        up=up_deg,
+        down=down_deg,
+        roll=roll_deg,
+    )
+
+
 def reset_debug_camera_orientation(
     timeout: float = 5.0,
     verbose: bool = False
@@ -359,6 +376,26 @@ def upright_reset_debug_camera(
 ) -> bool:
     """Reset attached debug camera to stable upright home view."""
     simulator.upright_reset_debug_camera()
+    if timeout <= 0:
+        return True
+    converged = _wait_for_convergence(
+        simulator.get_debug_camera_joint_diff,
+        simulator.get_debug_camera_joint_velocity,
+        pos_threshold=0.01,
+        vel_threshold=0.05,
+        timeout=timeout,
+        stable_frames=3,
+        verbose=verbose
+    )
+    return converged
+
+
+def flip_debug_camera_direction_180(
+    timeout: float = 5.0,
+    verbose: bool = False
+) -> bool:
+    """Flip attached debug camera horizontal direction by 180 degrees."""
+    simulator.flip_debug_camera_direction_180()
     if timeout <= 0:
         return True
     converged = _wait_for_convergence(
@@ -516,8 +553,10 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         - get_object_positions() -> list of object dictionaries with id, name, position and orientation
         - get_debug_camera_joint_position() -> [left_right, up_down, roll] in radians
         - set_debug_camera_target_joint(target_joint, timeout, verbose) -> move attached debug camera direction
+        - set_debug_camera_direction_steps(left_deg, right_deg, up_deg, down_deg, roll_deg) -> set independent angle step sizes
         - reset_debug_camera_orientation(timeout, verbose) -> reset attached debug camera direction
         - upright_reset_debug_camera(timeout, verbose) -> reset attached debug camera to upright home view
+        - flip_debug_camera_direction_180(timeout, verbose) -> rotate attached debug camera horizontal direction by 180 deg
         - get_debug_camera_zoom_fovy() -> attached debug camera zoom (FOV in degrees)
         - set_debug_camera_zoom_fovy(fovy_deg) -> set attached debug camera zoom (FOV in degrees)
         - reset_debug_camera_zoom() -> reset attached debug camera zoom
@@ -562,8 +601,10 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         "get_object_positions": get_object_positions,
         "get_debug_camera_joint_position": get_debug_camera_joint_position,
         "set_debug_camera_target_joint": set_debug_camera_target_joint,
+        "set_debug_camera_direction_steps": set_debug_camera_direction_steps,
         "reset_debug_camera_orientation": reset_debug_camera_orientation,
         "upright_reset_debug_camera": upright_reset_debug_camera,
+        "flip_debug_camera_direction_180": flip_debug_camera_direction_180,
         "get_debug_camera_zoom_fovy": get_debug_camera_zoom_fovy,
         "set_debug_camera_zoom_fovy": set_debug_camera_zoom_fovy,
         "reset_debug_camera_zoom": reset_debug_camera_zoom,

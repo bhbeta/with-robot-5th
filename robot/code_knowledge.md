@@ -77,11 +77,18 @@ Returns attached debug camera orientation angles `[left_right, up_down, roll]` i
 `set_debug_camera_target_joint(target_joint, timeout=5.0, verbose=False)` -> `bool`
 Sets attached debug camera orientation target angles. Returns `True` if converged.
 
+`set_debug_camera_direction_steps(left_deg, right_deg, up_deg, down_deg, roll_deg=3.0)` -> `dict`
+Sets independent angle-step sizes (degrees) for camera left/right/up/down/roll controls.
+Range per step: `0.2` to `180.0` degrees.
+
 `reset_debug_camera_orientation(timeout=5.0, verbose=False)` -> `bool`
 Resets attached debug camera direction to home orientation.
 
 `upright_reset_debug_camera(timeout=5.0, verbose=False)` -> `bool`
 Resets attached debug camera to upright home view (`roll=0`) and home zoom.
+
+`flip_debug_camera_direction_180(timeout=5.0, verbose=False)` -> `bool`
+Rotates attached debug camera horizontal direction by 180 degrees.
 
 `get_debug_camera_zoom_fovy()` -> `float`
 Returns attached debug camera zoom as vertical FOV in degrees.
@@ -124,15 +131,20 @@ Viewer helper:
 - `toggle_viewer_debug_camera_panel_window()` toggles the separate debug camera control window.
 - `toggle_viewer_help()` toggles extended help panel.
 - A separate debug camera control window is shown by default when tkinter is available.
+- Control-window camera edits auto-enable attached debug camera live preview.
+- Control-window buttons and sliders are routed through the same simulator command queue (single safe path).
 - If tkinter is unavailable, compact overlay fallback is used.
 - While attached debug camera view is active:
   - Arrow keys rotate camera left/right/up/down
   - `,` / `.` rotate camera roll
   - `+` / `-` zoom in/out
+  - Left/Right/Up/Down each use independent step-size options from the debug panel
   - `R` resets camera orientation
   - `0` resets zoom
   - `U` restores upright home view
+  - `Y` flips camera horizontal direction by 180 degrees
 - Debug camera joints are stabilized kinematically each simulation step for low-shake vision debugging.
+- Home orientation includes map-direction correction (about 180 deg) and keeps image upright.
 - Attached debug camera controls affect only the debug camera rig, not mobile/arm/gripper APIs.
 
 `GET /vision/frame` query options:
