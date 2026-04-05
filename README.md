@@ -53,11 +53,17 @@ The server will start on `http://0.0.0.0:8800` with:
   - `F9`: force third-person
   - `F10`: force hand camera (fixed)
   - `F11`: hand camera free inspect mode
-  - `F12`: toggle right-side debug camera panel
+  - `F12`: toggle separate debug camera control window
   - `H`: toggle extended help
   - `Arrow keys`: camera left/right/up/down while attached debug camera view is active
   - Arrow-key steering keeps the same attached debug camera view and does not affect mobile/arm/gripper APIs
-  - Default on-screen debug info is compact; detailed key help appears only when `H` is enabled
+  - A separate attached debug camera control window opens for interactive control:
+    - current view mode and camera angles
+    - camera left/right/up/down buttons
+    - reset camera direction button
+    - third-person / hand-camera shortcuts
+    - step-size input
+  - If tkinter is unavailable, compact on-screen status is used as fallback
 
 ## Usage
 

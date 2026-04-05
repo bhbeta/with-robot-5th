@@ -10,6 +10,13 @@ from scipy.spatial.transform import Rotation as R
 from typing import Optional, List, Tuple, Dict, Any
 from simulator_util import PathPlanner, GridMapUtils
 
+try:
+    import tkinter as tk
+    from tkinter import ttk
+except Exception:  # pragma: no cover - optional runtime dependency
+    tk = None
+    ttk = None
+
 
 class RobotConfig:
     """Robot simulation configuration constants."""
@@ -271,6 +278,7 @@ class MujocoSimulator:
         except ValueError:
             # Keep the default joint target if look-at target cannot be resolved.
             pass
+        self._debug_camera_home_target_joint = self._debug_camera_target_joint.copy()
 
         # Offscreen renderers for vision pipeline (cached by resolution)
         self._renderers: Dict[Tuple[int, int], mujoco.Renderer] = {}
@@ -282,11 +290,16 @@ class MujocoSimulator:
         )
         self._viewer_command_lock = threading.Lock()
         self._viewer_pending_camera_commands = deque()
-        self._viewer_show_compact_status = True
+        self._debug_panel_available = tk is not None and ttk is not None
+        self._viewer_show_compact_status = not self._debug_panel_available
         self._viewer_show_extended_help = False
         self._viewer_overlay_update_period = 0.15
         self._viewer_overlay_last_update_time = 0.0
         self._viewer_last_key_time: Dict[int, float] = {}
+        self._debug_camera_manual_step_deg = float(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG)
+        self._debug_panel_window_visible = self._debug_panel_available
+        self._debug_panel_stop_event = threading.Event()
+        self._debug_panel_thread: Optional[threading.Thread] = None
 
     @staticmethod
     def _is_attached_debug_camera_mode(mode: str) -> bool:
@@ -376,7 +389,7 @@ class MujocoSimulator:
         return labels.get(self._viewer_camera_mode, self._viewer_camera_mode)
 
     def _build_compact_status_text(self) -> str:
-        """Compact right-side panel text for debug-camera workflow."""
+        """Compact fallback text block when separate panel is unavailable."""
         attached_view_on = self._is_attached_debug_camera_mode(self._viewer_camera_mode)
         attached_control_on = self._viewer_camera_mode == RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_CONTROL
         lines = [
@@ -390,7 +403,7 @@ class MujocoSimulator:
             up_down_deg = -np.rad2deg(joint[1])
             lines.append(f"Camera left/right: {left_right_deg:+.1f} deg")
             lines.append(f"Camera up/down: {up_down_deg:+.1f} deg")
-        lines.append("F7 view  Arrows rotate  H help")
+        lines.append("F7 view  Arrows rotate  F12 panel/window")
         return "\n".join(lines)
 
     @staticmethod
@@ -403,7 +416,7 @@ class MujocoSimulator:
             "F9  : Third-person view\n"
             "F10 : Hand camera (fixed)\n"
             "F11 : Hand camera (free inspect)\n"
-            "F12 : Show/hide right-side debug panel\n"
+            "F12 : Show/hide debug camera control window\n"
             "H   : Show/hide this help\n"
             "\n"
             "While attached debug camera view is active\n"
@@ -415,12 +428,12 @@ class MujocoSimulator:
         )
 
     def _set_viewer_overlay(self, viewer: Any) -> None:
-        """Show compact right-side panel and optional extended help."""
+        """Show optional fallback overlay and help."""
         texts: List[Tuple[Optional[int], Optional[int], Optional[str], Optional[str]]] = []
 
-        # MuJoCo Python viewer does not expose native custom categories for the
-        # built-in right-side UI panels (Joint/Control/Equality). Use a compact
-        # right-aligned panel-style text block as the closest replacement.
+        # MuJoCo Python viewer does not expose native custom category insertion
+        # for built-in right-side UI sections (Joint/Control/Equality). Keep
+        # overlay minimal; the dedicated debug control window is the primary UI.
         if self._viewer_show_compact_status:
             texts.append(
                 (
@@ -454,6 +467,196 @@ class MujocoSimulator:
             return False
         self._viewer_last_key_time[keycode] = now
         return True
+
+    def set_debug_camera_manual_step_deg(self, step_deg: float) -> float:
+        """Set manual camera movement step in degrees (user-facing control)."""
+        step = float(step_deg)
+        step = float(np.clip(step, 0.2, 45.0))
+        self._debug_camera_manual_step_deg = step
+        return self._debug_camera_manual_step_deg
+
+    def reset_debug_camera_orientation(self) -> np.ndarray:
+        """Reset attached debug camera direction to configured home orientation."""
+        self.set_debug_camera_target_joint(self._debug_camera_home_target_joint.copy())
+        return self.get_debug_camera_target_joint()
+
+    def _start_debug_camera_control_panel(self) -> None:
+        """Start separate attached debug camera control window if tkinter is available."""
+        if not self._debug_panel_available:
+            return
+        if self._debug_panel_thread and self._debug_panel_thread.is_alive():
+            return
+        self._debug_panel_stop_event.clear()
+        self._debug_panel_thread = threading.Thread(
+            target=self._run_debug_camera_control_panel,
+            daemon=True,
+            name="DebugCameraControlPanel",
+        )
+        self._debug_panel_thread.start()
+
+    def _stop_debug_camera_control_panel(self) -> None:
+        """Request attached debug camera control panel shutdown."""
+        self._debug_panel_stop_event.set()
+        panel_thread = self._debug_panel_thread
+        if panel_thread and panel_thread.is_alive():
+            panel_thread.join(timeout=2.0)
+        self._debug_panel_thread = None
+
+    def _run_debug_camera_control_panel(self) -> None:
+        """Tkinter-based attached debug camera control panel."""
+        if not self._debug_panel_available:
+            return
+
+        try:
+            root = tk.Tk()
+        except Exception as e:
+            self._debug_panel_available = False
+            self._viewer_show_compact_status = True
+            print(f"[VIEWER] Debug camera control window unavailable: {e}")
+            return
+
+        root.title("Attached Debug Camera Control")
+        root.geometry("360x360+20+140")
+        root.resizable(False, False)
+
+        main = ttk.Frame(root, padding=10)
+        main.pack(fill="both", expand=True)
+
+        view_mode_var = tk.StringVar(value="View mode: -")
+        view_on_var = tk.StringVar(value="Attached debug camera view: OFF")
+        h_angle_var = tk.StringVar(value="Camera left/right: +0.0 deg")
+        v_angle_var = tk.StringVar(value="Camera up/down: +0.0 deg")
+        step_var = tk.StringVar(value=f"{self._debug_camera_manual_step_deg:.1f}")
+        help_visible = tk.BooleanVar(value=False)
+
+        ttk.Label(main, text="Attached Debug Camera", font=("Segoe UI", 10, "bold")).grid(
+            row=0, column=0, columnspan=3, sticky="w"
+        )
+        ttk.Label(main, textvariable=view_mode_var).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(main, textvariable=view_on_var).grid(row=2, column=0, columnspan=3, sticky="w")
+        ttk.Label(main, textvariable=h_angle_var).grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Label(main, textvariable=v_angle_var).grid(row=4, column=0, columnspan=3, sticky="w")
+
+        ttk.Label(main, text="Step size (deg)").grid(row=5, column=0, sticky="w", pady=(10, 0))
+        step_entry = ttk.Entry(main, width=8, textvariable=step_var)
+        step_entry.grid(row=5, column=1, sticky="w", pady=(10, 0))
+
+        def _read_step_deg() -> float:
+            try:
+                step = float(step_var.get())
+            except ValueError:
+                step = self._debug_camera_manual_step_deg
+            step = self.set_debug_camera_manual_step_deg(step)
+            step_var.set(f"{step:.1f}")
+            return step
+
+        def _ensure_debug_control_mode() -> None:
+            if not self._is_attached_debug_camera_mode(self._viewer_camera_mode):
+                self._queue_viewer_camera_command(RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_CONTROL)
+
+        def _camera_left() -> None:
+            _read_step_deg()
+            _ensure_debug_control_mode()
+            self._queue_viewer_camera_command("debug_cam_pan_left")
+
+        def _camera_right() -> None:
+            _read_step_deg()
+            _ensure_debug_control_mode()
+            self._queue_viewer_camera_command("debug_cam_pan_right")
+
+        def _camera_up() -> None:
+            _read_step_deg()
+            _ensure_debug_control_mode()
+            self._queue_viewer_camera_command("debug_cam_tilt_up")
+
+        def _camera_down() -> None:
+            _read_step_deg()
+            _ensure_debug_control_mode()
+            self._queue_viewer_camera_command("debug_cam_tilt_down")
+
+        def _toggle_debug_view() -> None:
+            self._queue_viewer_camera_command("toggle_attached_debug_camera_view")
+
+        def _reset_direction() -> None:
+            self._queue_viewer_camera_command("debug_cam_reset_home")
+
+        ttk.Button(main, text="Enter/Exit Camera View (F7)", command=_toggle_debug_view).grid(
+            row=6, column=0, columnspan=3, sticky="ew", pady=(10, 6)
+        )
+
+        ttk.Button(main, text="Camera Up", command=_camera_up).grid(row=7, column=1, sticky="ew", pady=2)
+        ttk.Button(main, text="Camera Left", command=_camera_left).grid(row=8, column=0, sticky="ew", pady=2)
+        ttk.Button(main, text="Camera Right", command=_camera_right).grid(row=8, column=2, sticky="ew", pady=2)
+        ttk.Button(main, text="Camera Down", command=_camera_down).grid(row=9, column=1, sticky="ew", pady=2)
+
+        ttk.Button(main, text="Reset Camera Direction", command=_reset_direction).grid(
+            row=10, column=0, columnspan=3, sticky="ew", pady=(8, 2)
+        )
+        ttk.Button(
+            main,
+            text="Third-person",
+            command=lambda: self._queue_viewer_camera_command(RobotConfig.VIEWER_MODE_THIRD_PERSON),
+        ).grid(row=11, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(
+            main,
+            text="Hand Camera",
+            command=lambda: self._queue_viewer_camera_command(RobotConfig.VIEWER_MODE_HAND_CAMERA_FIXED),
+        ).grid(row=11, column=1, columnspan=2, sticky="ew", pady=(8, 0))
+
+        help_label = ttk.Label(
+            main,
+            text="Arrow keys also rotate camera while attached debug camera view is active.",
+            wraplength=320,
+            justify="left",
+        )
+
+        def _toggle_help() -> None:
+            help_visible.set(not help_visible.get())
+            if help_visible.get():
+                help_label.grid(row=13, column=0, columnspan=3, sticky="w", pady=(8, 0))
+            else:
+                help_label.grid_forget()
+
+        ttk.Button(main, text="Show/Hide Help", command=_toggle_help).grid(
+            row=12, column=0, columnspan=3, sticky="ew", pady=(8, 0)
+        )
+
+        for col in range(3):
+            main.columnconfigure(col, weight=1)
+
+        def _on_close() -> None:
+            self._debug_panel_window_visible = False
+            root.withdraw()
+
+        root.protocol("WM_DELETE_WINDOW", _on_close)
+
+        def _poll() -> None:
+            if self._debug_panel_stop_event.is_set():
+                root.destroy()
+                return
+
+            if self._debug_panel_window_visible:
+                if not root.winfo_viewable():
+                    root.deiconify()
+            else:
+                if root.winfo_viewable():
+                    root.withdraw()
+
+            mode_label = self._viewer_mode_human_label()
+            in_debug_view = self._is_attached_debug_camera_mode(self._viewer_camera_mode)
+            joint = self.get_debug_camera_joint_position()
+            left_right_deg = np.rad2deg(joint[0])
+            up_down_deg = -np.rad2deg(joint[1])
+
+            view_mode_var.set(f"View mode: {mode_label}")
+            view_on_var.set(f"Attached debug camera view: {'ON' if in_debug_view else 'OFF'}")
+            h_angle_var.set(f"Camera left/right: {left_right_deg:+.1f} deg")
+            v_angle_var.set(f"Camera up/down: {up_down_deg:+.1f} deg")
+
+            root.after(100, _poll)
+
+        root.after(100, _poll)
+        root.mainloop()
 
     def _update_robot_eye_debug_camera(self, viewer: Any, force_distance: bool = False) -> None:
         """Keep free camera centered on eye-in-hand for mouse-look debugging."""
@@ -516,12 +719,16 @@ class MujocoSimulator:
         self._queue_viewer_camera_command("toggle")
 
     def toggle_viewer_control_debug(self) -> None:
-        """Backward-compatible alias for right-side debug panel toggle."""
-        self._queue_viewer_camera_command("toggle_compact_status")
+        """Backward-compatible alias for debug camera control window toggle."""
+        self._queue_viewer_camera_command("toggle_debug_camera_panel_window")
 
     def toggle_viewer_compact_status(self) -> None:
-        """Toggle compact right-side debug panel."""
-        self._queue_viewer_camera_command("toggle_compact_status")
+        """Backward-compatible alias for debug camera control window toggle."""
+        self._queue_viewer_camera_command("toggle_debug_camera_panel_window")
+
+    def toggle_viewer_debug_camera_panel_window(self) -> None:
+        """Toggle separate debug camera control window."""
+        self._queue_viewer_camera_command("toggle_debug_camera_panel_window")
 
     def toggle_viewer_help(self) -> None:
         """Toggle extended camera help panel."""
@@ -545,10 +752,15 @@ class MujocoSimulator:
             self._toggle_viewer_camera_mode(viewer)
             print(f"[VIEWER] View mode: {self._viewer_mode_human_label()}.")
             return
-        if command == "toggle_compact_status":
-            self._viewer_show_compact_status = not self._viewer_show_compact_status
-            status = "ON" if self._viewer_show_compact_status else "OFF"
-            print(f"[VIEWER] Attached debug camera panel: {status}.")
+        if command in ("toggle_debug_camera_panel_window", "toggle_compact_status"):
+            if self._debug_panel_available:
+                self._debug_panel_window_visible = not self._debug_panel_window_visible
+                status = "ON" if self._debug_panel_window_visible else "OFF"
+                print(f"[VIEWER] Debug camera control window: {status}.")
+            else:
+                self._viewer_show_compact_status = not self._viewer_show_compact_status
+                status = "ON" if self._viewer_show_compact_status else "OFF"
+                print(f"[VIEWER] Overlay fallback status: {status}.")
             return
         if command == "toggle_help":
             self._viewer_show_extended_help = not self._viewer_show_extended_help
@@ -590,25 +802,28 @@ class MujocoSimulator:
             if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
                 if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW:
                     self._set_viewer_camera_mode(viewer, RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_CONTROL)
-                self._nudge_debug_camera_target(delta_pan=+np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
+                self._nudge_debug_camera_target(delta_pan=+np.deg2rad(self._debug_camera_manual_step_deg))
             return
         if command == "debug_cam_pan_right":
             if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
                 if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW:
                     self._set_viewer_camera_mode(viewer, RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_CONTROL)
-                self._nudge_debug_camera_target(delta_pan=-np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
+                self._nudge_debug_camera_target(delta_pan=-np.deg2rad(self._debug_camera_manual_step_deg))
             return
         if command == "debug_cam_tilt_up":
             if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
                 if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW:
                     self._set_viewer_camera_mode(viewer, RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_CONTROL)
-                self._nudge_debug_camera_target(delta_tilt=+np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
+                self._nudge_debug_camera_target(delta_tilt=+np.deg2rad(self._debug_camera_manual_step_deg))
             return
         if command == "debug_cam_tilt_down":
             if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
                 if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW:
                     self._set_viewer_camera_mode(viewer, RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_CONTROL)
-                self._nudge_debug_camera_target(delta_tilt=-np.deg2rad(RobotConfig.DEBUG_CAMERA_MANUAL_STEP_DEG))
+                self._nudge_debug_camera_target(delta_tilt=-np.deg2rad(self._debug_camera_manual_step_deg))
+            return
+        if command == "debug_cam_reset_home":
+            self.reset_debug_camera_orientation()
             return
 
         if self._is_attached_debug_camera_mode(command) and not self._is_attached_debug_camera_mode(self._viewer_camera_mode):
@@ -1518,6 +1733,8 @@ class MujocoSimulator:
 
     def run(self) -> None:
         """Run simulation with 3D viewer and PD control loop (blocking)."""
+        self._start_debug_camera_control_panel()
+
         def key_callback(keycode: int) -> None:
             if keycode == RobotConfig.VIEWER_KEY_ATTACHED_DEBUG_CAMERA_VIEW_TOGGLE:
                 if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
@@ -1542,7 +1759,7 @@ class MujocoSimulator:
             elif keycode == RobotConfig.VIEWER_KEY_TOGGLE_DEBUG_CAMERA_PANEL:
                 if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
                     return
-                self._queue_viewer_camera_command("toggle_compact_status")
+                self._queue_viewer_camera_command("toggle_debug_camera_panel_window")
             elif keycode in (RobotConfig.VIEWER_KEY_TOGGLE_HELP, ord("h"), ord("H")):
                 if not self._accept_viewer_key(RobotConfig.VIEWER_KEY_TOGGLE_HELP, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
                     return
@@ -1565,70 +1782,74 @@ class MujocoSimulator:
                         return
                     self._queue_viewer_camera_command("debug_cam_pan_right")
 
-        with mujoco.viewer.launch_passive(self.model, self.data, key_callback=key_callback) as v:
-            # Camera setup (default: third-person)
-            with v.lock():
-                self._set_viewer_camera_mode(v, RobotConfig.VIEWER_MODE_THIRD_PERSON)
-                self._set_viewer_overlay(v)
+        try:
+            with mujoco.viewer.launch_passive(self.model, self.data, key_callback=key_callback) as v:
+                # Camera setup (default: third-person)
+                with v.lock():
+                    self._set_viewer_camera_mode(v, RobotConfig.VIEWER_MODE_THIRD_PERSON)
+                    self._set_viewer_overlay(v)
 
-                # Hide debug visuals
-                v.opt.geomgroup[0] = 0
-                v.opt.sitegroup[0] = v.opt.sitegroup[1] = v.opt.sitegroup[2] = 0
-                v.opt.flags[mujoco.mjtVisFlag.mjVIS_TRANSPARENT] = False
-                v.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = False
-                v.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = False
-                v.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTFORCE] = False
-                v.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTOBJ] = False
-                v.opt.frame = mujoco.mjtFrame.mjFRAME_NONE
-                v.opt.label = mujoco.mjtLabel.mjLABEL_NONE
+                    # Hide geom group 0 to keep collision geoms off.
+                    # Debug camera mount geoms are explicitly assigned to group 1 in XML.
+                    v.opt.geomgroup[0] = 0
+                    v.opt.sitegroup[0] = v.opt.sitegroup[1] = v.opt.sitegroup[2] = 0
+                    v.opt.flags[mujoco.mjtVisFlag.mjVIS_TRANSPARENT] = False
+                    v.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = False
+                    v.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = False
+                    v.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTFORCE] = False
+                    v.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTOBJ] = False
+                    v.opt.frame = mujoco.mjtFrame.mjFRAME_NONE
+                    v.opt.label = mujoco.mjtLabel.mjLABEL_NONE
 
-            print(
-                "[VIEWER] Camera hotkeys: "
-                "'F7' attached_debug_camera_view on/off, 'F8' third<->hand_fixed, "
-                "'F9' third_person, 'F10' hand_camera_fixed, 'F11' hand_camera_inspect, "
-                "'F12' right-side debug panel, 'H' help; arrows rotate camera while attached view is active."
-            )
+                print(
+                    "[VIEWER] Camera hotkeys: "
+                    "'F7' attached_debug_camera_view on/off, 'F8' third<->hand_fixed, "
+                    "'F9' third_person, 'F10' hand_camera_fixed, 'F11' hand_camera_inspect, "
+                    "'F12' debug control window on/off, 'H' help; arrows rotate camera while attached view is active."
+                )
 
-            # Main loop
-            while v.is_running():
-                viewer_command = self._pop_viewer_camera_command()
-                if viewer_command is not None:
-                    with v.lock():
-                        self._apply_viewer_camera_command(v, viewer_command)
-                        self._set_viewer_overlay(v)
-                        self._viewer_overlay_last_update_time = time.time()
+                # Main loop
+                while v.is_running():
+                    viewer_command = self._pop_viewer_camera_command()
+                    if viewer_command is not None:
+                        with v.lock():
+                            self._apply_viewer_camera_command(v, viewer_command)
+                            self._set_viewer_overlay(v)
+                            self._viewer_overlay_last_update_time = time.time()
 
-                # mobile base control
-                mobile_control = self._compute_mobile_control()
-                self.data.ctrl[self.mobile_actuator_ids[0]] = mobile_control[0]
-                self.data.ctrl[self.mobile_actuator_ids[1]] = mobile_control[1]
-                self.data.ctrl[self.mobile_actuator_ids[2]] = mobile_control[2]
+                    # mobile base control
+                    mobile_control = self._compute_mobile_control()
+                    self.data.ctrl[self.mobile_actuator_ids[0]] = mobile_control[0]
+                    self.data.ctrl[self.mobile_actuator_ids[1]] = mobile_control[1]
+                    self.data.ctrl[self.mobile_actuator_ids[2]] = mobile_control[2]
 
-                # arm control
-                arm_control = self._compute_arm_control()
-                for i, actuator_id in enumerate(self.arm_actuator_ids):
-                    self.data.ctrl[actuator_id] = arm_control[i]
+                    # arm control
+                    arm_control = self._compute_arm_control()
+                    for i, actuator_id in enumerate(self.arm_actuator_ids):
+                        self.data.ctrl[actuator_id] = arm_control[i]
 
-                # gripper control
-                gripper_control = self._compute_gripper_control()
-                for i, actuator_id in enumerate(self.gripper_actuator_ids):
-                    self.data.ctrl[actuator_id] = gripper_control[i]
+                    # gripper control
+                    gripper_control = self._compute_gripper_control()
+                    for i, actuator_id in enumerate(self.gripper_actuator_ids):
+                        self.data.ctrl[actuator_id] = gripper_control[i]
 
-                # debug camera rig control
-                debug_cam_control = self._compute_debug_camera_control()
-                for i, actuator_id in enumerate(self.debug_camera_actuator_ids):
-                    self.data.ctrl[actuator_id] = debug_cam_control[i]
+                    # debug camera rig control
+                    debug_cam_control = self._compute_debug_camera_control()
+                    for i, actuator_id in enumerate(self.debug_camera_actuator_ids):
+                        self.data.ctrl[actuator_id] = debug_cam_control[i]
 
-                mujoco.mj_step(self.model, self.data)
+                    mujoco.mj_step(self.model, self.data)
 
-                if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_HAND_CAMERA_INSPECT:
-                    with v.lock():
-                        self._update_robot_eye_debug_camera(v)
+                    if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_HAND_CAMERA_INSPECT:
+                        with v.lock():
+                            self._update_robot_eye_debug_camera(v)
 
-                now = time.time()
-                if now - self._viewer_overlay_last_update_time >= self._viewer_overlay_update_period:
-                    with v.lock():
-                        self._set_viewer_overlay(v)
-                    self._viewer_overlay_last_update_time = now
+                    now = time.time()
+                    if now - self._viewer_overlay_last_update_time >= self._viewer_overlay_update_period:
+                        with v.lock():
+                            self._set_viewer_overlay(v)
+                        self._viewer_overlay_last_update_time = now
 
-                v.sync()
+                    v.sync()
+        finally:
+            self._stop_debug_camera_control_panel()

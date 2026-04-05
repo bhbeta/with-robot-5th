@@ -181,21 +181,21 @@
               <inertial pos="0 0 0.04" mass="0.06" diaginertia="0.001 0.001 0.001"/>
 
               <!-- Bracket intentionally intersects torso shell so attachment reads as physically bolted -->
-              <geom name="robot0_debug_mount_chassis_bracket" type="box" pos="-0.085 0 0.005" size="0.055 0.04 0.05" contype="0" conaffinity="0" rgba="0.15 0.15 0.18 1"/>
-              <geom name="robot0_debug_mount_base_plate" type="box" pos="-0.025 0 0.020" size="0.032 0.036 0.018" contype="0" conaffinity="0" rgba="0.22 0.22 0.25 1"/>
-              <geom name="robot0_debug_mount_support_arm" type="capsule" fromto="-0.02 0 0.02 0.09 0 0.12" size="0.012" contype="0" conaffinity="0" rgba="0.45 0.45 0.50 1"/>
-              <geom name="robot0_debug_mount_support_brace_lower" type="capsule" fromto="-0.03 0 -0.02 0.07 0 0.06" size="0.009" contype="0" conaffinity="0" rgba="0.32 0.32 0.36 1"/>
-              <geom name="robot0_debug_mount_support_brace_upper" type="capsule" fromto="-0.03 0 0.02 0.07 0 0.10" size="0.008" contype="0" conaffinity="0" rgba="0.32 0.32 0.36 1"/>
+              <geom name="robot0_debug_mount_chassis_bracket" type="box" pos="-0.085 0 0.005" size="0.055 0.04 0.05" group="1" contype="0" conaffinity="0" rgba="0.15 0.15 0.18 1"/>
+              <geom name="robot0_debug_mount_base_plate" type="box" pos="-0.025 0 0.020" size="0.032 0.036 0.018" group="1" contype="0" conaffinity="0" rgba="0.22 0.22 0.25 1"/>
+              <geom name="robot0_debug_mount_support_arm" type="capsule" fromto="-0.02 0 0.02 0.09 0 0.12" size="0.012" group="1" contype="0" conaffinity="0" rgba="0.45 0.45 0.50 1"/>
+              <geom name="robot0_debug_mount_support_brace_lower" type="capsule" fromto="-0.03 0 -0.02 0.07 0 0.06" size="0.009" group="1" contype="0" conaffinity="0" rgba="0.32 0.32 0.36 1"/>
+              <geom name="robot0_debug_mount_support_brace_upper" type="capsule" fromto="-0.03 0 0.02 0.07 0 0.10" size="0.008" group="1" contype="0" conaffinity="0" rgba="0.32 0.32 0.36 1"/>
 
               <body name="robot0_debug_camera_pan_link" pos="0.09 0 0.12">
                 <joint name="robot0_debug_camera_pan_joint" pos="0 0 0" axis="0 0 1" type="hinge" limited="true" range="-3.1416 3.1416" damping="1.0" frictionloss="0.01"/>
-                <geom name="robot0_debug_pan_disk" type="cylinder" size="0.034 0.012" contype="0" conaffinity="0" rgba="0.09 0.09 0.11 1"/>
-                <geom name="robot0_debug_pan_arm" type="capsule" fromto="0 0 0 0.10 0 0" size="0.009" contype="0" conaffinity="0" rgba="0.50 0.50 0.55 1"/>
+                <geom name="robot0_debug_pan_disk" type="cylinder" size="0.034 0.012" group="1" contype="0" conaffinity="0" rgba="0.09 0.09 0.11 1"/>
+                <geom name="robot0_debug_pan_arm" type="capsule" fromto="0 0 0 0.10 0 0" size="0.009" group="1" contype="0" conaffinity="0" rgba="0.50 0.50 0.55 1"/>
 
                 <body name="robot0_debug_camera_tilt_link" pos="0.10 0 0">
                   <joint name="robot0_debug_camera_tilt_joint" pos="0 0 0" axis="0 1 0" type="hinge" limited="true" range="-1.30 1.10" damping="1.0" frictionloss="0.01"/>
-                  <geom name="robot0_debug_tilt_housing" type="box" size="0.036 0.026 0.026" contype="0" conaffinity="0" rgba="0.08 0.08 0.10 1"/>
-                  <geom name="robot0_debug_camera_lens" type="cylinder" pos="0.040 0 0" size="0.013 0.024" quat="0.707107 0 0.707107 0" contype="0" conaffinity="0" rgba="0.05 0.40 0.40 1"/>
+                  <geom name="robot0_debug_tilt_housing" type="box" size="0.036 0.026 0.026" group="1" contype="0" conaffinity="0" rgba="0.08 0.08 0.10 1"/>
+                  <geom name="robot0_debug_camera_lens" type="cylinder" pos="0.040 0 0" size="0.013 0.024" group="1" quat="0.707107 0 0.707107 0" contype="0" conaffinity="0" rgba="0.05 0.40 0.40 1"/>
                   <camera name="robot0_debug_head_camera" pos="0.072 0 0" quat="0.707107 0 -0.707107 0" fovy="70"/>
                 </body>
               </body>

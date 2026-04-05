@@ -72,13 +72,16 @@ Returns `{"rgb": np.ndarray, "depth": np.ndarray | None}` from offscreen renderi
 ## Debug Camera Rig & Point Cloud
 
 `get_debug_camera_joint_position()` -> `list[float]`
-Returns debug camera pan/tilt joint angles `[pan, tilt]` in radians.
+Returns attached debug camera horizontal/vertical angles `[left_right, up_down_internal]` in radians.
 
 `set_debug_camera_target_joint(target_joint, timeout=5.0, verbose=False)` -> `bool`
-Sets debug camera pan/tilt target angles `[pan, tilt]`. Returns `True` if converged.
+Sets attached debug camera horizontal/vertical target angles. Returns `True` if converged.
+
+`reset_debug_camera_orientation(timeout=5.0, verbose=False)` -> `bool`
+Resets attached debug camera direction to home orientation.
 
 `look_at_point(target_xyz, timeout=5.0, verbose=False)` -> `bool`
-Computes debug camera pan/tilt so the camera looks at a world point `[x, y, z]`.
+Rotates attached debug camera so it looks at a world point `[x, y, z]`.
 
 `get_camera_intrinsics(camera_name, width=320, height=240)` -> `dict`
 Returns intrinsics for a named camera.
@@ -106,9 +109,11 @@ Viewer helper:
 - `toggle_viewer_attached_debug_camera_view()` toggles attached debug camera view on/off.
 - `toggle_viewer_attached_debug_camera_control()` toggles attached debug camera control mode.
 - `toggle_viewer_debug_camera_manual_mode()` is a backward-compatible alias for attached debug camera control.
-- `toggle_viewer_compact_status()` toggles compact right-side debug panel.
+- `toggle_viewer_compact_status()` toggles the separate debug camera control window.
+- `toggle_viewer_debug_camera_panel_window()` toggles the separate debug camera control window.
 - `toggle_viewer_help()` toggles extended help panel.
-- Compact panel is shown by default; extended help is hidden by default.
+- A separate debug camera control window is shown by default when tkinter is available.
+- If tkinter is unavailable, compact overlay fallback is used.
 - While attached debug camera view is active, arrow keys rotate camera left/right/up/down.
 - Attached debug camera control affects only the debug camera rig, not mobile/arm/gripper APIs.
 

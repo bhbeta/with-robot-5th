@@ -306,7 +306,7 @@ def get_object_positions() -> Dict[str, Dict[str, Any]]:
 
 
 def get_debug_camera_joint_position() -> List[float]:
-    """Get debug camera pan/tilt joint angles [pan, tilt] in radians."""
+    """Get attached debug camera horizontal/vertical joint angles [h, v] in radians."""
     return simulator.get_debug_camera_joint_position().tolist()
 
 
@@ -315,7 +315,7 @@ def set_debug_camera_target_joint(
     timeout: float = 5.0,
     verbose: bool = False
 ) -> bool:
-    """Set debug camera pan/tilt targets [pan, tilt] in radians."""
+    """Set attached debug camera horizontal/vertical targets [h, v] in radians."""
     simulator.set_debug_camera_target_joint(target_joint)
 
     success = True
@@ -331,6 +331,26 @@ def set_debug_camera_target_joint(
         )
         success = converged
     return success
+
+
+def reset_debug_camera_orientation(
+    timeout: float = 5.0,
+    verbose: bool = False
+) -> bool:
+    """Reset attached debug camera to its home orientation."""
+    simulator.reset_debug_camera_orientation()
+    if timeout <= 0:
+        return True
+    converged = _wait_for_convergence(
+        simulator.get_debug_camera_joint_diff,
+        simulator.get_debug_camera_joint_velocity,
+        pos_threshold=0.01,
+        vel_threshold=0.05,
+        timeout=timeout,
+        stable_frames=3,
+        verbose=verbose
+    )
+    return converged
 
 
 def look_at_point(
@@ -400,13 +420,13 @@ def toggle_viewer_camera_mode() -> bool:
 
 
 def toggle_viewer_control_debug() -> bool:
-    """Backward-compatible alias for compact viewer status toggle."""
+    """Backward-compatible alias for debug camera control window toggle."""
     simulator.toggle_viewer_control_debug()
     return True
 
 
 def toggle_viewer_compact_status() -> bool:
-    """Toggle compact viewer status overlay."""
+    """Backward-compatible alias for debug camera control window toggle."""
     simulator.toggle_viewer_compact_status()
     return True
 
@@ -414,6 +434,12 @@ def toggle_viewer_compact_status() -> bool:
 def toggle_viewer_help() -> bool:
     """Toggle extended viewer help overlay."""
     simulator.toggle_viewer_help()
+    return True
+
+
+def toggle_viewer_debug_camera_panel_window() -> bool:
+    """Toggle separate debug camera control window."""
+    simulator.toggle_viewer_debug_camera_panel_window()
     return True
 
 
@@ -453,16 +479,18 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         - place_object(place_pos, approach_height, retract_height, return_to_home, timeout, verbose)
         - get_grid_map() -> grid map of the environment
         - get_object_positions() -> list of object dictionaries with id, name, position and orientation
-        - get_debug_camera_joint_position() -> [pan, tilt] in radians
-        - set_debug_camera_target_joint(target_joint, timeout, verbose) -> move debug camera pan/tilt
+        - get_debug_camera_joint_position() -> [horizontal, vertical] in radians
+        - set_debug_camera_target_joint(target_joint, timeout, verbose) -> move attached debug camera direction
+        - reset_debug_camera_orientation(timeout, verbose) -> reset attached debug camera direction
         - look_at_point(target_xyz, timeout, verbose) -> rotate debug camera toward world point
         - get_camera_intrinsics(camera_name, width, height) -> camera intrinsics
         - get_camera_extrinsics(camera_name) -> camera extrinsics
         - get_camera_point_cloud(camera_name, max_depth, stride, frame, width, height) -> RGBD point cloud
         - set_viewer_camera_mode(mode) -> request mode ('third_person'|'hand_camera_fixed'|'hand_camera_inspect'|'attached_debug_camera_view'|'attached_debug_camera_control'|'toggle')
         - toggle_viewer_camera_mode() -> request camera toggle
-        - toggle_viewer_control_debug() -> legacy alias for debug panel toggle
-        - toggle_viewer_compact_status() -> toggle compact right-side debug panel
+        - toggle_viewer_control_debug() -> legacy alias for debug camera control window toggle
+        - toggle_viewer_compact_status() -> legacy alias for debug camera control window toggle
+        - toggle_viewer_debug_camera_panel_window() -> toggle debug camera control window
         - toggle_viewer_help() -> toggle extended help panel
         - toggle_viewer_attached_debug_camera_view() -> toggle attached debug camera view
         - toggle_viewer_attached_debug_camera_control() -> toggle attached debug camera control mode
@@ -495,6 +523,7 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         "get_object_positions": get_object_positions,
         "get_debug_camera_joint_position": get_debug_camera_joint_position,
         "set_debug_camera_target_joint": set_debug_camera_target_joint,
+        "reset_debug_camera_orientation": reset_debug_camera_orientation,
         "look_at_point": look_at_point,
         "get_camera_intrinsics": get_camera_intrinsics,
         "get_camera_extrinsics": get_camera_extrinsics,
@@ -503,6 +532,7 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         "toggle_viewer_camera_mode": toggle_viewer_camera_mode,
         "toggle_viewer_control_debug": toggle_viewer_control_debug,
         "toggle_viewer_compact_status": toggle_viewer_compact_status,
+        "toggle_viewer_debug_camera_panel_window": toggle_viewer_debug_camera_panel_window,
         "toggle_viewer_help": toggle_viewer_help,
         "toggle_viewer_attached_debug_camera_view": toggle_viewer_attached_debug_camera_view,
         "toggle_viewer_attached_debug_camera_control": toggle_viewer_attached_debug_camera_control,
