@@ -56,13 +56,19 @@ The server will start on `http://0.0.0.0:8800` with:
   - `F12`: toggle separate debug camera control window
   - `H`: toggle extended help
   - `Arrow keys`: camera left/right/up/down while attached debug camera view is active
-  - Arrow-key steering keeps the same attached debug camera view and does not affect mobile/arm/gripper APIs
+  - `,` / `.`: camera roll left/right while attached debug camera view is active
+  - `+` / `-`: zoom in/out while attached debug camera view is active
+  - Keyboard controls keep the same attached debug camera view and do not affect mobile/arm/gripper APIs
   - A separate attached debug camera control window opens for interactive control:
     - current view mode and camera angles
+    - current zoom (FOV)
     - camera left/right/up/down buttons
+    - camera roll left/right controls
+    - zoom in/out and zoom slider
     - reset camera direction button
+    - reset zoom button
     - third-person / hand-camera shortcuts
-    - step-size input
+    - rotation/zoom step-size inputs and orientation sliders
   - If tkinter is unavailable, compact on-screen status is used as fallback
 
 ## Usage

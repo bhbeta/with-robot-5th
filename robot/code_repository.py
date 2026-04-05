@@ -306,7 +306,7 @@ def get_object_positions() -> Dict[str, Dict[str, Any]]:
 
 
 def get_debug_camera_joint_position() -> List[float]:
-    """Get attached debug camera horizontal/vertical joint angles [h, v] in radians."""
+    """Get attached debug camera orientation [left_right, up_down, roll] in radians."""
     return simulator.get_debug_camera_joint_position().tolist()
 
 
@@ -315,7 +315,7 @@ def set_debug_camera_target_joint(
     timeout: float = 5.0,
     verbose: bool = False
 ) -> bool:
-    """Set attached debug camera horizontal/vertical targets [h, v] in radians."""
+    """Set attached debug camera orientation target [left_right, up_down, roll] in radians."""
     simulator.set_debug_camera_target_joint(target_joint)
 
     success = True
@@ -351,6 +351,21 @@ def reset_debug_camera_orientation(
         verbose=verbose
     )
     return converged
+
+
+def get_debug_camera_zoom_fovy() -> float:
+    """Get attached debug camera zoom (vertical FOV in degrees)."""
+    return simulator.get_debug_camera_zoom_fovy()
+
+
+def set_debug_camera_zoom_fovy(fovy_deg: float) -> float:
+    """Set attached debug camera zoom (vertical FOV in degrees)."""
+    return simulator.set_debug_camera_zoom_fovy(fovy_deg)
+
+
+def reset_debug_camera_zoom() -> float:
+    """Reset attached debug camera zoom to default."""
+    return simulator.reset_debug_camera_zoom()
 
 
 def look_at_point(
@@ -408,7 +423,7 @@ def get_camera_point_cloud(
 
 
 def set_viewer_camera_mode(mode: str = "toggle") -> bool:
-    """Request viewer mode update: third_person/hand_camera_fixed/hand_camera_inspect/attached_debug_camera_view/attached_debug_camera_control/toggle."""
+    """Request viewer mode update: third_person/hand_camera_fixed/hand_camera_inspect/attached_debug_camera_view/toggle."""
     simulator.set_viewer_camera_mode(mode)
     return True
 
@@ -450,13 +465,13 @@ def toggle_viewer_attached_debug_camera_view() -> bool:
 
 
 def toggle_viewer_attached_debug_camera_control() -> bool:
-    """Toggle attached debug camera control mode."""
+    """Backward-compatible alias for attached debug camera view toggle."""
     simulator.toggle_viewer_attached_debug_camera_control()
     return True
 
 
 def toggle_viewer_debug_camera_manual_mode() -> bool:
-    """Backward-compatible alias for attached debug camera control mode."""
+    """Backward-compatible alias for attached debug camera view toggle."""
     simulator.toggle_viewer_debug_camera_manual_mode()
     return True
 
@@ -479,22 +494,25 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         - place_object(place_pos, approach_height, retract_height, return_to_home, timeout, verbose)
         - get_grid_map() -> grid map of the environment
         - get_object_positions() -> list of object dictionaries with id, name, position and orientation
-        - get_debug_camera_joint_position() -> [horizontal, vertical] in radians
+        - get_debug_camera_joint_position() -> [left_right, up_down, roll] in radians
         - set_debug_camera_target_joint(target_joint, timeout, verbose) -> move attached debug camera direction
         - reset_debug_camera_orientation(timeout, verbose) -> reset attached debug camera direction
+        - get_debug_camera_zoom_fovy() -> attached debug camera zoom (FOV in degrees)
+        - set_debug_camera_zoom_fovy(fovy_deg) -> set attached debug camera zoom (FOV in degrees)
+        - reset_debug_camera_zoom() -> reset attached debug camera zoom
         - look_at_point(target_xyz, timeout, verbose) -> rotate debug camera toward world point
         - get_camera_intrinsics(camera_name, width, height) -> camera intrinsics
         - get_camera_extrinsics(camera_name) -> camera extrinsics
         - get_camera_point_cloud(camera_name, max_depth, stride, frame, width, height) -> RGBD point cloud
-        - set_viewer_camera_mode(mode) -> request mode ('third_person'|'hand_camera_fixed'|'hand_camera_inspect'|'attached_debug_camera_view'|'attached_debug_camera_control'|'toggle')
+        - set_viewer_camera_mode(mode) -> request mode ('third_person'|'hand_camera_fixed'|'hand_camera_inspect'|'attached_debug_camera_view'|'toggle')
         - toggle_viewer_camera_mode() -> request camera toggle
         - toggle_viewer_control_debug() -> legacy alias for debug camera control window toggle
         - toggle_viewer_compact_status() -> legacy alias for debug camera control window toggle
         - toggle_viewer_debug_camera_panel_window() -> toggle debug camera control window
         - toggle_viewer_help() -> toggle extended help panel
         - toggle_viewer_attached_debug_camera_view() -> toggle attached debug camera view
-        - toggle_viewer_attached_debug_camera_control() -> toggle attached debug camera control mode
-        - toggle_viewer_debug_camera_manual_mode() -> legacy alias for attached debug camera control mode
+        - toggle_viewer_attached_debug_camera_control() -> legacy alias for attached debug camera view toggle
+        - toggle_viewer_debug_camera_manual_mode() -> legacy alias for attached debug camera view toggle
     """
     # Define sandboxed environment with limited access
     safe_globals = {
@@ -524,6 +542,9 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         "get_debug_camera_joint_position": get_debug_camera_joint_position,
         "set_debug_camera_target_joint": set_debug_camera_target_joint,
         "reset_debug_camera_orientation": reset_debug_camera_orientation,
+        "get_debug_camera_zoom_fovy": get_debug_camera_zoom_fovy,
+        "set_debug_camera_zoom_fovy": set_debug_camera_zoom_fovy,
+        "reset_debug_camera_zoom": reset_debug_camera_zoom,
         "look_at_point": look_at_point,
         "get_camera_intrinsics": get_camera_intrinsics,
         "get_camera_extrinsics": get_camera_extrinsics,
