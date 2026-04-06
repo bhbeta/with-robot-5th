@@ -499,6 +499,48 @@ def get_camera_point_cloud(
     )
 
 
+def get_boundary_partition(
+    camera_name: str = "robot0_debug_head_camera",
+    width: int = 320,
+    height: int = 240,
+    min_region_pixels: int = 45,
+    boundary_quantile: float = 0.82,
+    include_maps: bool = True,
+    include_visualizations: bool = True,
+) -> Dict[str, Any]:
+    """Generate single-view RGB-D boundary partition baseline outputs."""
+    return simulator.get_boundary_partition(
+        camera_name=camera_name,
+        width=width,
+        height=height,
+        min_region_pixels=min_region_pixels,
+        boundary_quantile=boundary_quantile,
+        include_maps=include_maps,
+        include_visualizations=include_visualizations,
+    )
+
+
+def save_boundary_partition_debug(
+    camera_name: str = "robot0_debug_head_camera",
+    width: int = 320,
+    height: int = 240,
+    min_region_pixels: int = 45,
+    boundary_quantile: float = 0.82,
+    output_dir: str = "outputs/vision_boundary",
+    prefix: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Save boundary partition debug visualizations to disk."""
+    return simulator.save_boundary_partition_debug(
+        camera_name=camera_name,
+        width=width,
+        height=height,
+        min_region_pixels=min_region_pixels,
+        boundary_quantile=boundary_quantile,
+        output_dir=output_dir,
+        prefix=prefix,
+    )
+
+
 def set_viewer_camera_mode(mode: str = "toggle") -> bool:
     """Request viewer mode update: third_person/hand_camera_fixed/hand_camera_inspect/attached_debug_camera_view/attached_debug_camera_edit_third_person/toggle."""
     simulator.set_viewer_camera_mode(mode)
@@ -603,6 +645,8 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         - get_camera_intrinsics(camera_name, width, height) -> camera intrinsics
         - get_camera_extrinsics(camera_name) -> camera extrinsics
         - get_camera_point_cloud(camera_name, max_depth, stride, frame, width, height) -> RGBD point cloud
+        - get_boundary_partition(camera_name, width, height, min_region_pixels, boundary_quantile, include_maps, include_visualizations) -> RGB-D boundary partition baseline
+        - save_boundary_partition_debug(camera_name, width, height, min_region_pixels, boundary_quantile, output_dir, prefix) -> save debug images + metadata
         - set_viewer_camera_mode(mode) -> request mode ('third_person'|'hand_camera_fixed'|'hand_camera_inspect'|'attached_debug_camera_view'|'attached_debug_camera_edit_third_person'|'toggle')
         - toggle_viewer_camera_mode() -> request camera toggle
         - toggle_viewer_control_debug() -> legacy alias for debug camera control window toggle
@@ -655,6 +699,8 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         "get_camera_intrinsics": get_camera_intrinsics,
         "get_camera_extrinsics": get_camera_extrinsics,
         "get_camera_point_cloud": get_camera_point_cloud,
+        "get_boundary_partition": get_boundary_partition,
+        "save_boundary_partition_debug": save_boundary_partition_debug,
         "set_viewer_camera_mode": set_viewer_camera_mode,
         "toggle_viewer_camera_mode": toggle_viewer_camera_mode,
         "toggle_viewer_control_debug": toggle_viewer_control_debug,

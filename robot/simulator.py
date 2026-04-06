@@ -2,6 +2,8 @@
 
 import time
 import threading
+import os
+import json
 from collections import deque
 import numpy as np
 import glfw
@@ -9,6 +11,12 @@ import mujoco, mujoco.viewer
 from scipy.spatial.transform import Rotation as R
 from typing import Optional, List, Tuple, Dict, Any
 from simulator_util import PathPlanner, GridMapUtils
+from vision_boundary import compute_boundary_partition
+
+try:
+    from PIL import Image
+except Exception:  # pragma: no cover - optional runtime dependency
+    Image = None
 
 try:
     import tkinter as tk
@@ -125,6 +133,9 @@ class RobotConfig:
     POINT_CLOUD_DEFAULT_MAX_DEPTH = 4.0
     POINT_CLOUD_DEFAULT_FRAME = "world"
     CAMERA_FRAME_CONVENTION = "opencv"
+    BOUNDARY_PARTITION_DEFAULT_CAMERA = DEBUG_CAMERA_NAME
+    BOUNDARY_PARTITION_DEFAULT_MIN_REGION_PIXELS = 45
+    BOUNDARY_PARTITION_DEFAULT_QUANTILE = 0.82
     VIEWER_MODE_THIRD_PERSON = "third_person"
     VIEWER_MODE_HAND_CAMERA_FIXED = "hand_camera_fixed"
     VIEWER_MODE_HAND_CAMERA_INSPECT = "hand_camera_inspect"
@@ -1870,6 +1881,159 @@ class MujocoSimulator:
             "num_points": int(points_out.shape[0]),
             "intrinsics": intrinsics,
             "extrinsics": extrinsics,
+        }
+
+    # ============================================================
+    # Single-View RGB-D Boundary Partition (Pre-semantic baseline)
+    # ============================================================
+
+    def _compute_boundary_partition_raw(
+        self,
+        camera_name: Optional[str] = None,
+        width: int = RobotConfig.CAMERA_DEFAULT_WIDTH,
+        height: int = RobotConfig.CAMERA_DEFAULT_HEIGHT,
+        min_region_pixels: int = RobotConfig.BOUNDARY_PARTITION_DEFAULT_MIN_REGION_PIXELS,
+        boundary_quantile: float = RobotConfig.BOUNDARY_PARTITION_DEFAULT_QUANTILE,
+    ) -> Dict[str, Any]:
+        cam_name = camera_name or RobotConfig.BOUNDARY_PARTITION_DEFAULT_CAMERA
+        frame = self.capture_camera_frame(
+            width=width,
+            height=height,
+            camera_name=cam_name,
+            include_depth=True,
+        )
+        depth = frame["depth"]
+        if depth is None:
+            raise ValueError("Depth rendering is not available for boundary partition generation")
+        rgb = frame["rgb"]
+        intrinsics = self.get_camera_intrinsics(width=width, height=height, camera_name=cam_name)
+        extrinsics = self.get_camera_extrinsics(cam_name)
+        raw = compute_boundary_partition(
+            rgb=rgb,
+            depth=depth.astype(np.float32),
+            intrinsics=intrinsics,
+            extrinsics=extrinsics,
+            min_region_pixels=int(min_region_pixels),
+            boundary_quantile=float(boundary_quantile),
+        )
+        raw["timestamp"] = float(time.time())
+        raw["camera_name"] = cam_name
+        raw["intrinsics"] = intrinsics
+        raw["extrinsics"] = extrinsics
+        return raw
+
+    def get_boundary_partition(
+        self,
+        camera_name: Optional[str] = None,
+        width: int = RobotConfig.CAMERA_DEFAULT_WIDTH,
+        height: int = RobotConfig.CAMERA_DEFAULT_HEIGHT,
+        min_region_pixels: int = RobotConfig.BOUNDARY_PARTITION_DEFAULT_MIN_REGION_PIXELS,
+        boundary_quantile: float = RobotConfig.BOUNDARY_PARTITION_DEFAULT_QUANTILE,
+        include_maps: bool = True,
+        include_visualizations: bool = True,
+    ) -> Dict[str, Any]:
+        """Generate single-view RGB-D boundary partition baseline outputs."""
+        raw = self._compute_boundary_partition_raw(
+            camera_name=camera_name,
+            width=width,
+            height=height,
+            min_region_pixels=min_region_pixels,
+            boundary_quantile=boundary_quantile,
+        )
+
+        response: Dict[str, Any] = {
+            "timestamp": raw["timestamp"],
+            "camera_name": raw["camera_name"],
+            "width": int(raw["width"]),
+            "height": int(raw["height"]),
+            "valid_pixel_count": int(raw["valid_pixel_count"]),
+            "intrinsics": raw["intrinsics"],
+            "extrinsics": raw["extrinsics"],
+            "parameters": raw["parameters"],
+            "region_stats": raw["region_stats"],
+        }
+
+        if include_maps:
+            response.update(
+                {
+                    "rgb_edge_map": raw["rgb_edge_map"].astype(float).tolist(),
+                    "depth_discontinuity_map": raw["depth_discontinuity_map"].astype(float).tolist(),
+                    "normal_discontinuity_map": raw["normal_discontinuity_map"].astype(float).tolist(),
+                    "support_surface_mask": raw["support_surface_mask"].astype(int).tolist(),
+                    "boundary_score_map": raw["boundary_score_map"].astype(float).tolist(),
+                    "boundary_mask": raw["boundary_mask"].astype(int).tolist(),
+                    "region_labels": raw["region_labels"].astype(int).tolist(),
+                }
+            )
+
+        if include_visualizations:
+            vis: Dict[str, Any] = {}
+            for key, image in raw["visualizations"].items():
+                vis[key] = image.astype(int).tolist()
+            response["visualizations"] = vis
+
+        return response
+
+    def save_boundary_partition_debug(
+        self,
+        camera_name: Optional[str] = None,
+        width: int = RobotConfig.CAMERA_DEFAULT_WIDTH,
+        height: int = RobotConfig.CAMERA_DEFAULT_HEIGHT,
+        min_region_pixels: int = RobotConfig.BOUNDARY_PARTITION_DEFAULT_MIN_REGION_PIXELS,
+        boundary_quantile: float = RobotConfig.BOUNDARY_PARTITION_DEFAULT_QUANTILE,
+        output_dir: str = "outputs/vision_boundary",
+        prefix: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Save boundary partition visual debug outputs and metadata to disk."""
+        if Image is None:
+            raise ValueError("Pillow is required to save boundary-partition debug images")
+
+        raw = self._compute_boundary_partition_raw(
+            camera_name=camera_name,
+            width=width,
+            height=height,
+            min_region_pixels=min_region_pixels,
+            boundary_quantile=boundary_quantile,
+        )
+
+        os.makedirs(output_dir, exist_ok=True)
+        token = prefix or f"{raw['camera_name']}_{int(raw['timestamp'] * 1000)}"
+
+        saved_images: Dict[str, str] = {}
+        for key, image in raw["visualizations"].items():
+            file_path = os.path.join(output_dir, f"{token}_{key}.png")
+            Image.fromarray(image.astype(np.uint8)).save(file_path)
+            saved_images[key] = file_path
+
+        labels_path = os.path.join(output_dir, f"{token}_region_labels.npy")
+        np.save(labels_path, raw["region_labels"].astype(np.int32))
+
+        metadata = {
+            "timestamp": raw["timestamp"],
+            "camera_name": raw["camera_name"],
+            "width": int(raw["width"]),
+            "height": int(raw["height"]),
+            "valid_pixel_count": int(raw["valid_pixel_count"]),
+            "intrinsics": raw["intrinsics"],
+            "extrinsics": raw["extrinsics"],
+            "parameters": raw["parameters"],
+            "region_stats": raw["region_stats"],
+            "saved_images": saved_images,
+            "region_labels_path": labels_path,
+        }
+        metadata_path = os.path.join(output_dir, f"{token}_meta.json")
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+        return {
+            "timestamp": raw["timestamp"],
+            "camera_name": raw["camera_name"],
+            "output_dir": output_dir,
+            "token": token,
+            "saved_images": saved_images,
+            "region_labels_path": labels_path,
+            "metadata_path": metadata_path,
+            "region_stats": raw["region_stats"],
         }
 
     # ============================================================

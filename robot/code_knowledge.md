@@ -120,6 +120,22 @@ Generates point cloud from RGB+depth:
 - `camera_name`: source camera
 - `num_points`: number of valid points
 
+`get_boundary_partition(camera_name="robot0_debug_head_camera", width=320, height=240, min_region_pixels=45, boundary_quantile=0.82, include_maps=True, include_visualizations=True)` -> `dict`
+Single-view RGB-D pre-semantic boundary partition baseline:
+- `rgb_edge_map`
+- `depth_discontinuity_map`
+- `normal_discontinuity_map`
+- `support_surface_mask`
+- `boundary_score_map`
+- `boundary_mask`
+- `region_labels`
+- `region_stats`
+- `visualizations` (if enabled)
+
+`save_boundary_partition_debug(camera_name="robot0_debug_head_camera", width=320, height=240, min_region_pixels=45, boundary_quantile=0.82, output_dir="outputs/vision_boundary", prefix=None)` -> `dict`
+Saves visual debug images + region label `.npy` + metadata `.json`.
+Returns saved paths (`saved_images`, `region_labels_path`, `metadata_path`).
+
 Viewer helper:
 - `set_viewer_camera_mode(mode)` supports:
   - `third_person`
@@ -164,6 +180,19 @@ Viewer helper:
 - `camera_name`: optional named MuJoCo camera
 - `include_rgb`: include RGB array in JSON response
 - `include_depth`: include depth array in JSON response
+
+`GET /vision/boundary-partition` query options:
+- `camera_name`: optional, defaults to attached debug camera
+- `width`, `height`: positive integers (max `1280x720`)
+- `min_region_pixels`: region minimum size (>=5)
+- `boundary_quantile`: boundary threshold quantile (`0.55~0.98`)
+- `include_maps`: include raw intermediate maps
+- `include_visualizations`: include visual debug images
+
+`GET /vision/boundary-partition/save` query options:
+- same core options as above
+- `output_dir`: where to save debug outputs
+- `prefix`: optional filename prefix
 
 ## Constants
 - `PI`: 3.14159...

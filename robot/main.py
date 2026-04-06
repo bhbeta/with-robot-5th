@@ -173,6 +173,84 @@ def get_vision_point_cloud(
     }
 
 
+@app.get("/vision/boundary-partition")
+def get_vision_boundary_partition(
+    camera_name: Optional[str] = None,
+    width: int = 320,
+    height: int = 240,
+    min_region_pixels: int = 45,
+    boundary_quantile: float = 0.82,
+    include_maps: bool = True,
+    include_visualizations: bool = True,
+) -> Dict[str, Any]:
+    """Generate single-view RGB-D boundary partition outputs and debug visualizations."""
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=400, detail="width/height must be positive integers")
+    if width > 1280 or height > 720:
+        raise HTTPException(status_code=400, detail="width/height too large (max: 1280x720)")
+    if min_region_pixels < 5:
+        raise HTTPException(status_code=400, detail="min_region_pixels must be >= 5")
+    if not (0.55 <= boundary_quantile <= 0.98):
+        raise HTTPException(status_code=400, detail="boundary_quantile must be in [0.55, 0.98]")
+
+    try:
+        result = simulator.get_boundary_partition(
+            camera_name=camera_name,
+            width=width,
+            height=height,
+            min_region_pixels=min_region_pixels,
+            boundary_quantile=boundary_quantile,
+            include_maps=include_maps,
+            include_visualizations=include_visualizations,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    return {
+        "timestamp": time.time(),
+        "boundary_partition": result,
+    }
+
+
+@app.get("/vision/boundary-partition/save")
+def save_vision_boundary_partition(
+    camera_name: Optional[str] = None,
+    width: int = 320,
+    height: int = 240,
+    min_region_pixels: int = 45,
+    boundary_quantile: float = 0.82,
+    output_dir: str = "outputs/vision_boundary",
+    prefix: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Save boundary-partition visual debug images and metadata to disk."""
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=400, detail="width/height must be positive integers")
+    if width > 1280 or height > 720:
+        raise HTTPException(status_code=400, detail="width/height too large (max: 1280x720)")
+    if min_region_pixels < 5:
+        raise HTTPException(status_code=400, detail="min_region_pixels must be >= 5")
+    if not (0.55 <= boundary_quantile <= 0.98):
+        raise HTTPException(status_code=400, detail="boundary_quantile must be in [0.55, 0.98]")
+
+    try:
+        saved = simulator.save_boundary_partition_debug(
+            camera_name=camera_name,
+            width=width,
+            height=height,
+            min_region_pixels=min_region_pixels,
+            boundary_quantile=boundary_quantile,
+            output_dir=output_dir,
+            prefix=prefix,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    return {
+        "timestamp": time.time(),
+        "saved": saved,
+    }
+
+
 @app.post("/send_action")
 def receive_action(payload: Dict[str, Any]) -> Dict[str, Any]:
     """

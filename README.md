@@ -139,7 +139,50 @@ Notes:
 - `width` / `height` must be positive and at most `1280x720`.
 - At least one of `include_rgb` / `include_depth` must be `true`.
 
+Single-view RGB-D boundary partition (pre-semantic):
+```bash
+GET "http://localhost:8800/vision/boundary-partition?camera_name=robot0_debug_head_camera&width=320&height=240&min_region_pixels=45&boundary_quantile=0.82&include_maps=true&include_visualizations=true"
+```
+
+Save boundary partition debug outputs to disk:
+```bash
+GET "http://localhost:8800/vision/boundary-partition/save?camera_name=robot0_debug_head_camera&width=320&height=240&output_dir=outputs/vision_boundary"
+```
+
+Boundary partition output includes:
+- RGB edge map
+- depth discontinuity map
+- normal discontinuity map
+- support surface mask
+- fused boundary score map
+- region labels and region stats
+- debug visualizations (boundary overlay, region color map, support overlay, and mosaic)
+
 ### Example Code
+
+#### RGB-D Boundary Partition Debug
+```python
+# 1) Generate single-view boundary partition outputs
+bp = get_boundary_partition(
+    camera_name="robot0_debug_head_camera",
+    width=320,
+    height=240,
+    min_region_pixels=45,
+    boundary_quantile=0.82,
+    include_maps=True,
+    include_visualizations=True,
+)
+print(bp["valid_pixel_count"], len(bp["region_stats"]))
+
+# 2) Save visual debug images + metadata
+saved = save_boundary_partition_debug(
+    camera_name="robot0_debug_head_camera",
+    width=320,
+    height=240,
+    output_dir="outputs/vision_boundary",
+)
+print(saved["metadata_path"])
+```
 
 #### Mobile Base Control
 
