@@ -272,22 +272,23 @@
                                 <geom name="robot0_debug_mount_support_brace" type="capsule" fromto="-0.008 -0.010 -0.010 0.032 -0.006 0.035" size="0.0065" group="1" contype="0" conaffinity="0" rgba="0.33 0.33 0.37 1"/>
 
                                 <body name="robot0_debug_camera_yaw_link" pos="0.040 0.000 0.045">
-                                  <inertial pos="0 0 0" mass="0.03" diaginertia="0.0002 0.0002 0.0002"/>
-                                  <joint name="robot0_debug_camera_yaw_joint" pos="0 0 0" axis="0 0 1" type="hinge" limited="true" range="-3.1416 3.1416" damping="8.0" frictionloss="0.20" armature="0.05"/>
+                                  <inertial pos="0 0 0" mass="0.08" diaginertia="0.0010 0.0010 0.0010"/>
+                                  <joint name="robot0_debug_camera_yaw_joint" pos="0 0 0" axis="0 0 1" type="hinge" limited="true" range="-3.1416 3.1416" damping="20.0" frictionloss="0.60" armature="0.20"/>
                                   <geom name="robot0_debug_camera_yaw_disk" type="cylinder" size="0.026 0.009" group="1" contype="0" conaffinity="0" rgba="0.10 0.10 0.12 1"/>
                                   <geom name="robot0_debug_camera_yaw_arm" type="capsule" fromto="0 0 0 0.040 0 0" size="0.007" group="1" contype="0" conaffinity="0" rgba="0.53 0.53 0.58 1"/>
 
                                   <body name="robot0_debug_camera_pitch_link" pos="0.040 0 0">
-                                    <inertial pos="0 0 0" mass="0.025" diaginertia="0.00015 0.00015 0.00015"/>
-                                    <joint name="robot0_debug_camera_pitch_joint" pos="0 0 0" axis="0 1 0" type="hinge" limited="true" range="-2.80 2.80" damping="8.0" frictionloss="0.20" armature="0.05"/>
+                                    <inertial pos="0 0 0" mass="0.06" diaginertia="0.0008 0.0008 0.0008"/>
+                                    <joint name="robot0_debug_camera_pitch_joint" pos="0 0 0" axis="0 1 0" type="hinge" limited="true" range="-2.80 2.80" damping="20.0" frictionloss="0.60" armature="0.20"/>
                                     <geom name="robot0_debug_camera_pitch_housing" type="box" size="0.022 0.018 0.018" group="1" contype="0" conaffinity="0" rgba="0.09 0.09 0.11 1"/>
 
                                     <body name="robot0_debug_camera_roll_link" pos="0.028 0 0">
-                                      <inertial pos="0 0 0" mass="0.02" diaginertia="0.0001 0.0001 0.0001"/>
-                                      <joint name="robot0_debug_camera_roll_joint" pos="0 0 0" axis="1 0 0" type="hinge" limited="true" range="-3.1416 3.1416" damping="7.0" frictionloss="0.15" armature="0.04"/>
+                                      <inertial pos="0 0 0" mass="0.05" diaginertia="0.0007 0.0007 0.0007"/>
+                                      <joint name="robot0_debug_camera_roll_joint" pos="0 0 0" axis="1 0 0" type="hinge" limited="true" range="-3.1416 3.1416" damping="18.0" frictionloss="0.50" armature="0.18"/>
                                       <geom name="robot0_debug_camera_roll_ring" type="cylinder" size="0.015 0.010" quat="0.707107 0 0.707107 0" group="1" contype="0" conaffinity="0" rgba="0.12 0.12 0.14 1"/>
                                       <geom name="robot0_debug_camera_housing" type="box" pos="0.022 0 0" size="0.023 0.018 0.015" group="1" contype="0" conaffinity="0" rgba="0.08 0.08 0.10 1"/>
                                       <geom name="robot0_debug_camera_lens" type="cylinder" pos="0.044 0 0" size="0.0115 0.016" quat="0.707107 0 0.707107 0" group="1" contype="0" conaffinity="0" rgba="0.05 0.46 0.46 1"/>
+                                      <!-- Optical-axis 180 deg view flip is handled in simulator roll-control logic. -->
                                       <camera name="robot0_debug_head_camera" pos="0.050 0 0" quat="0.414778 0.572677 -0.414778 -0.572677" fovy="65"/>
                                     </body>
                                   </body>
@@ -372,9 +373,9 @@
     <position ctrllimited="true" ctrlrange="-100000.0 100000.0" joint="mobilebase0_joint_torso_height" kp="5000" kv="500" name="mobilebase0_actuator_torso_height" forcelimited="false" />
 
     <!-- Debug Camera Rig: Position control (yaw/pitch/roll) -->
-    <position ctrllimited="true" ctrlrange="-3.1416 3.1416" joint="robot0_debug_camera_yaw_joint" kp="250" kv="40" name="robot0_debug_camera_yaw_actuator" forcelimited="true" forcerange="-30 30" />
-    <position ctrllimited="true" ctrlrange="-2.80 2.80" joint="robot0_debug_camera_pitch_joint" kp="250" kv="40" name="robot0_debug_camera_pitch_actuator" forcelimited="true" forcerange="-30 30" />
-    <position ctrllimited="true" ctrlrange="-3.1416 3.1416" joint="robot0_debug_camera_roll_joint" kp="220" kv="35" name="robot0_debug_camera_roll_actuator" forcelimited="true" forcerange="-24 24" />
+    <position ctrllimited="true" ctrlrange="-3.1416 3.1416" joint="robot0_debug_camera_yaw_joint" kp="250" kv="80" name="robot0_debug_camera_yaw_actuator" forcelimited="true" forcerange="-30 30" />
+    <position ctrllimited="true" ctrlrange="-2.80 2.80" joint="robot0_debug_camera_pitch_joint" kp="250" kv="80" name="robot0_debug_camera_pitch_actuator" forcelimited="true" forcerange="-30 30" />
+    <position ctrllimited="true" ctrlrange="-3.1416 3.1416" joint="robot0_debug_camera_roll_joint" kp="220" kv="70" name="robot0_debug_camera_roll_actuator" forcelimited="true" forcerange="-24 24" />
 
     <!-- Gripper: Position control (2-finger parallel) -->
     <position ctrllimited="true" ctrlrange="0.0 0.04" joint="gripper0_right_finger_joint1" kp="1000" kv="50" name="gripper0_right_gripper_finger_joint1" forcelimited="true" forcerange="-20 20" />

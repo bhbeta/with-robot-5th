@@ -394,8 +394,28 @@ def flip_debug_camera_direction_180(
     timeout: float = 5.0,
     verbose: bool = False
 ) -> bool:
-    """Flip attached debug camera horizontal direction by 180 degrees."""
+    """Flip attached debug camera front/back direction by 180 degrees."""
     simulator.flip_debug_camera_direction_180()
+    if timeout <= 0:
+        return True
+    converged = _wait_for_convergence(
+        simulator.get_debug_camera_joint_diff,
+        simulator.get_debug_camera_joint_velocity,
+        pos_threshold=0.01,
+        vel_threshold=0.05,
+        timeout=timeout,
+        stable_frames=3,
+        verbose=verbose
+    )
+    return converged
+
+
+def flip_debug_camera_view_180(
+    timeout: float = 5.0,
+    verbose: bool = False
+) -> bool:
+    """Flip attached debug camera view by 180 degrees around screen-center axis."""
+    simulator.flip_debug_camera_view_180()
     if timeout <= 0:
         return True
     converged = _wait_for_convergence(
@@ -480,7 +500,7 @@ def get_camera_point_cloud(
 
 
 def set_viewer_camera_mode(mode: str = "toggle") -> bool:
-    """Request viewer mode update: third_person/hand_camera_fixed/hand_camera_inspect/attached_debug_camera_view/toggle."""
+    """Request viewer mode update: third_person/hand_camera_fixed/hand_camera_inspect/attached_debug_camera_view/attached_debug_camera_edit_third_person/toggle."""
     simulator.set_viewer_camera_mode(mode)
     return True
 
@@ -521,6 +541,12 @@ def toggle_viewer_attached_debug_camera_view() -> bool:
     return True
 
 
+def toggle_viewer_attached_debug_camera_edit_third_person() -> bool:
+    """Toggle third-person mode that edits attached debug camera orientation."""
+    simulator.toggle_viewer_attached_debug_camera_edit_third_person()
+    return True
+
+
 def toggle_viewer_attached_debug_camera_control() -> bool:
     """Backward-compatible alias for attached debug camera view toggle."""
     simulator.toggle_viewer_attached_debug_camera_control()
@@ -530,6 +556,18 @@ def toggle_viewer_attached_debug_camera_control() -> bool:
 def toggle_viewer_debug_camera_manual_mode() -> bool:
     """Backward-compatible alias for attached debug camera view toggle."""
     simulator.toggle_viewer_debug_camera_manual_mode()
+    return True
+
+
+def toggle_viewer_point_cloud() -> bool:
+    """Toggle viewer-side attached debug camera point cloud markers."""
+    simulator.toggle_viewer_point_cloud()
+    return True
+
+
+def refresh_viewer_point_cloud() -> bool:
+    """Refresh viewer-side attached debug camera point cloud markers."""
+    simulator.refresh_viewer_point_cloud()
     return True
 
 
@@ -556,7 +594,8 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         - set_debug_camera_direction_steps(left_deg, right_deg, up_deg, down_deg, roll_deg) -> set independent angle step sizes
         - reset_debug_camera_orientation(timeout, verbose) -> reset attached debug camera direction
         - upright_reset_debug_camera(timeout, verbose) -> reset attached debug camera to upright home view
-        - flip_debug_camera_direction_180(timeout, verbose) -> rotate attached debug camera horizontal direction by 180 deg
+        - flip_debug_camera_direction_180(timeout, verbose) -> flip camera direction 180 deg (front/back)
+        - flip_debug_camera_view_180(timeout, verbose) -> flip camera view 180 deg (screen axis)
         - get_debug_camera_zoom_fovy() -> attached debug camera zoom (FOV in degrees)
         - set_debug_camera_zoom_fovy(fovy_deg) -> set attached debug camera zoom (FOV in degrees)
         - reset_debug_camera_zoom() -> reset attached debug camera zoom
@@ -564,15 +603,18 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         - get_camera_intrinsics(camera_name, width, height) -> camera intrinsics
         - get_camera_extrinsics(camera_name) -> camera extrinsics
         - get_camera_point_cloud(camera_name, max_depth, stride, frame, width, height) -> RGBD point cloud
-        - set_viewer_camera_mode(mode) -> request mode ('third_person'|'hand_camera_fixed'|'hand_camera_inspect'|'attached_debug_camera_view'|'toggle')
+        - set_viewer_camera_mode(mode) -> request mode ('third_person'|'hand_camera_fixed'|'hand_camera_inspect'|'attached_debug_camera_view'|'attached_debug_camera_edit_third_person'|'toggle')
         - toggle_viewer_camera_mode() -> request camera toggle
         - toggle_viewer_control_debug() -> legacy alias for debug camera control window toggle
         - toggle_viewer_compact_status() -> legacy alias for debug camera control window toggle
         - toggle_viewer_debug_camera_panel_window() -> toggle debug camera control window
         - toggle_viewer_help() -> toggle extended help panel
         - toggle_viewer_attached_debug_camera_view() -> toggle attached debug camera view
+        - toggle_viewer_attached_debug_camera_edit_third_person() -> toggle third-person camera edit mode
         - toggle_viewer_attached_debug_camera_control() -> legacy alias for attached debug camera view toggle
         - toggle_viewer_debug_camera_manual_mode() -> legacy alias for attached debug camera view toggle
+        - toggle_viewer_point_cloud() -> toggle viewer-side point cloud markers
+        - refresh_viewer_point_cloud() -> refresh viewer-side point cloud markers
     """
     # Define sandboxed environment with limited access
     safe_globals = {
@@ -605,6 +647,7 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         "reset_debug_camera_orientation": reset_debug_camera_orientation,
         "upright_reset_debug_camera": upright_reset_debug_camera,
         "flip_debug_camera_direction_180": flip_debug_camera_direction_180,
+        "flip_debug_camera_view_180": flip_debug_camera_view_180,
         "get_debug_camera_zoom_fovy": get_debug_camera_zoom_fovy,
         "set_debug_camera_zoom_fovy": set_debug_camera_zoom_fovy,
         "reset_debug_camera_zoom": reset_debug_camera_zoom,
@@ -619,8 +662,11 @@ def exec_code(code: str) -> Optional[Dict[str, Any]]:
         "toggle_viewer_debug_camera_panel_window": toggle_viewer_debug_camera_panel_window,
         "toggle_viewer_help": toggle_viewer_help,
         "toggle_viewer_attached_debug_camera_view": toggle_viewer_attached_debug_camera_view,
+        "toggle_viewer_attached_debug_camera_edit_third_person": toggle_viewer_attached_debug_camera_edit_third_person,
         "toggle_viewer_attached_debug_camera_control": toggle_viewer_attached_debug_camera_control,
         "toggle_viewer_debug_camera_manual_mode": toggle_viewer_debug_camera_manual_mode,
+        "toggle_viewer_point_cloud": toggle_viewer_point_cloud,
+        "refresh_viewer_point_cloud": refresh_viewer_point_cloud,
     }
     exec(code, safe_globals)
     return safe_globals.get("RESULT")

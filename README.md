@@ -48,6 +48,7 @@ The server will start on `http://0.0.0.0:8800` with:
 - Interactive API documentation at `http://localhost:8800/docs`
 - 3D MuJoCo viewer window for real-time visualization
 - Viewer camera hotkeys:
+  - `F6`: enter/exit third-person camera edit mode (edit attached debug camera while staying third-person)
   - `F7`: enter/exit attached debug camera view
   - `F8`: toggle third-person <-> hand camera (fixed)
   - `F9`: force third-person
@@ -55,18 +56,23 @@ The server will start on `http://0.0.0.0:8800` with:
   - `F11`: hand camera free inspect mode
   - `F12`: toggle separate debug camera control window
   - `H`: toggle extended help
-  - `Arrow keys`: camera left/right/up/down while attached debug camera view is active
-  - `,` / `.`: camera roll left/right while attached debug camera view is active
-  - `+` / `-`: zoom in/out while attached debug camera view is active
-  - `R`: reset camera orientation while attached debug camera view is active
-  - `0`: reset zoom while attached debug camera view is active
-  - `U`: upright home view reset while attached debug camera view is active
-  - `Y`: flip camera direction by 180 degrees while attached debug camera view is active
-  - Control-window camera actions auto-switch viewer into attached debug camera view for live preview
+  - `Arrow keys`: camera left/right/up/down while debug preview is active
+  - `,` / `.`: camera roll left/right while debug preview is active
+  - `+` / `-`: zoom in/out while debug preview is active
+  - `R`: reset camera orientation while debug preview is active
+  - `0`: reset zoom while debug preview is active
+  - `U`: upright home view reset while debug preview is active
+  - `T`: flip view 180 deg around screen axis (roll-like flip)
+  - `Y`: flip direction 180 deg front/back (yaw-like flip)
+  - `P`: point cloud markers ON/OFF
+  - `N`: refresh point cloud markers
+  - Control-window camera actions follow selected preview style (attached view or third-person edit)
   - Control-window buttons and sliders share one simulator command-queue path (thread-safe control flow)
-  - Keyboard controls keep the same attached debug camera view and do not affect mobile/arm/gripper APIs
+  - Keyboard controls do not affect mobile/arm/gripper APIs
   - A separate attached debug camera control window opens for interactive control:
     - current view mode and camera angles
+    - current preview style (attached view / third-person edit)
+    - point cloud ON/OFF + refresh controls
     - current zoom (FOV)
     - independent angle-step options for left/right/up/down (plus roll step), each up to 180 deg
     - camera left/right/up/down buttons
@@ -75,11 +81,11 @@ The server will start on `http://0.0.0.0:8800` with:
     - reset camera direction button
     - reset zoom button
     - upright home view reset button
-    - flip direction 180 deg button
+    - flip view 180 deg (screen axis) + flip direction 180 deg buttons
     - third-person / hand-camera shortcuts
     - rotation/zoom step-size inputs and orientation sliders
   - Attached debug camera orientation is stabilized kinematically each step to reduce shake in vision debugging
-  - Home orientation applies map-direction correction (about 180 deg) while keeping image upright
+  - Home orientation uses explicit roll-axis correction support (screen-axis flip) and keeps front/back direction correction separate
   - If tkinter is unavailable, compact on-screen status is used as fallback
 
 ## Usage

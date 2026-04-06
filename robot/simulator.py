@@ -108,7 +108,8 @@ class RobotConfig:
     DEBUG_CAMERA_PITCH_OFFSET_LOCAL = np.array([0.04, 0.0, 0.0])
     DEBUG_CAMERA_DEFAULT_TARGET_JOINT = np.array([-0.55, -0.12, 0.0])
     DEBUG_CAMERA_DEFAULT_LOOK_AT_WORLD = np.array([0.20, -0.15, 0.85])
-    DEBUG_CAMERA_HOME_YAW_CORRECTION_RAD = np.pi
+    DEBUG_CAMERA_HOME_YAW_CORRECTION_RAD = 0.0
+    DEBUG_CAMERA_HOME_ROLL_CORRECTION_RAD = np.pi
     DEBUG_CAMERA_DEFAULT_FOVY_DEG = 65.0
     DEBUG_CAMERA_MIN_FOVY_DEG = 30.0
     DEBUG_CAMERA_MAX_FOVY_DEG = 95.0
@@ -128,12 +129,14 @@ class RobotConfig:
     VIEWER_MODE_HAND_CAMERA_FIXED = "hand_camera_fixed"
     VIEWER_MODE_HAND_CAMERA_INSPECT = "hand_camera_inspect"
     VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW = "attached_debug_camera_view"
+    VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON = "attached_debug_camera_edit_third_person"
     VIEWER_MODE_ATTACHED_DEBUG_CAMERA_CONTROL = "attached_debug_camera_control"
     # Backward-compatible mode aliases used by external sandbox calls.
     VIEWER_MODE_ROBOT_EYE_FIXED = VIEWER_MODE_HAND_CAMERA_FIXED
     VIEWER_MODE_ROBOT_EYE_INSPECT = VIEWER_MODE_HAND_CAMERA_INSPECT
     VIEWER_MODE_DEBUG_CAMERA_MANUAL = VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW
 
+    VIEWER_KEY_ATTACHED_DEBUG_CAMERA_EDIT_TOGGLE = glfw.KEY_F6
     VIEWER_KEY_ATTACHED_DEBUG_CAMERA_VIEW_TOGGLE = glfw.KEY_F7
     VIEWER_KEY_TOGGLE = glfw.KEY_F8
     VIEWER_KEY_THIRD_PERSON = glfw.KEY_F9
@@ -153,9 +156,18 @@ class RobotConfig:
     VIEWER_KEY_DEBUG_CAMERA_UPRIGHT_HOME = glfw.KEY_U
     VIEWER_KEY_DEBUG_CAMERA_RESET_ZOOM = glfw.KEY_0
     VIEWER_KEY_DEBUG_CAMERA_FLIP_DIRECTION = glfw.KEY_Y
+    VIEWER_KEY_DEBUG_CAMERA_FLIP_VIEW = glfw.KEY_T
+    VIEWER_KEY_POINT_CLOUD_TOGGLE = glfw.KEY_P
+    VIEWER_KEY_POINT_CLOUD_REFRESH = glfw.KEY_N
     VIEWER_ROBOT_EYE_DEBUG_DISTANCE = 0.35
     VIEWER_FN_KEY_DEBOUNCE_SEC = 0.20
     VIEWER_ARROW_KEY_REPEAT_SEC = 0.03
+    VIEWER_POINT_CLOUD_MARKER_RADIUS = 0.006
+    VIEWER_POINT_CLOUD_MARKER_ALPHA = 0.92
+    VIEWER_POINT_CLOUD_STRIDE = 8
+    VIEWER_POINT_CLOUD_MAX_DEPTH = 4.0
+    VIEWER_POINT_CLOUD_MAX_POINTS = 900
+    VIEWER_POINT_CLOUD_AUTO_REFRESH_SEC = 0.45
 
     MOBILE_INIT_POSITION = np.array([-1.0, 1.0, 0.0])
     ARM_INIT_POSITION = np.array([-0.0114, -1.0319,  0.0488, -2.2575,  0.0673,  1.5234, 0.6759])
@@ -321,7 +333,9 @@ class MujocoSimulator:
             corrected_home[0] = self._wrap_to_pi(
                 corrected_home[0] + float(RobotConfig.DEBUG_CAMERA_HOME_YAW_CORRECTION_RAD)
             )
-            corrected_home[2] = 0.0
+            corrected_home[2] = self._wrap_to_pi(
+                corrected_home[2] + float(RobotConfig.DEBUG_CAMERA_HOME_ROLL_CORRECTION_RAD)
+            )
             self.set_debug_camera_target_joint(corrected_home)
             self._apply_debug_camera_stabilization(recompute_kinematics=True)
         except ValueError:
@@ -356,12 +370,27 @@ class MujocoSimulator:
         self._debug_panel_stop_event = threading.Event()
         self._debug_panel_thread: Optional[threading.Thread] = None
         self._debug_live_preview_pending = False
+        self._debug_panel_preview_mode = "third_person_edit"
+        self._viewer_point_cloud_visible = False
+        self._viewer_point_cloud_dirty = True
+        self._viewer_point_cloud_last_update_time = 0.0
+        self._viewer_point_cloud_points = np.zeros((0, 3), dtype=np.float32)
+        self._viewer_point_cloud_colors = np.zeros((0, 3), dtype=np.float32)
+        self._viewer_point_cloud_last_error: Optional[str] = None
 
     @staticmethod
-    def _is_attached_debug_camera_mode(mode: str) -> bool:
+    def _is_attached_debug_camera_view_mode(mode: str) -> bool:
         return mode in (
             RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW,
             RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_CONTROL,
+        )
+
+    @staticmethod
+    def _is_debug_camera_edit_mode(mode: str) -> bool:
+        return mode in (
+            RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW,
+            RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_CONTROL,
+            RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON,
         )
 
     def _normalize_non_debug_restore_mode(self, mode: str) -> str:
@@ -370,6 +399,7 @@ class MujocoSimulator:
             RobotConfig.VIEWER_MODE_THIRD_PERSON,
             RobotConfig.VIEWER_MODE_HAND_CAMERA_FIXED,
             RobotConfig.VIEWER_MODE_HAND_CAMERA_INSPECT,
+            RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON,
         ):
             return mode
         return RobotConfig.VIEWER_MODE_THIRD_PERSON
@@ -403,7 +433,7 @@ class MujocoSimulator:
             self._update_robot_eye_debug_camera(viewer, force_distance=True)
             return True
 
-        if self._is_attached_debug_camera_mode(mode):
+        if self._is_attached_debug_camera_view_mode(mode):
             if self.debug_camera_id < 0:
                 print(
                     f"[VIEWER] '{RobotConfig.DEBUG_CAMERA_NAME}' camera not found. "
@@ -415,6 +445,19 @@ class MujocoSimulator:
             viewer.cam.fixedcamid = self.debug_camera_id
             # Keep user workflow simple: rotate/zoom while staying in debug camera view.
             self._viewer_camera_mode = RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW
+            return True
+
+        if mode == RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON:
+            viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+            if self._viewer_camera_mode not in (
+                RobotConfig.VIEWER_MODE_THIRD_PERSON,
+                RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON,
+            ):
+                viewer.cam.lookat[:] = RobotConfig.CAM_LOOKAT
+                viewer.cam.distance = RobotConfig.CAM_DISTANCE
+                viewer.cam.azimuth = RobotConfig.CAM_AZIMUTH
+                viewer.cam.elevation = RobotConfig.CAM_ELEVATION
+            self._viewer_camera_mode = RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON
             return True
 
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
@@ -442,18 +485,23 @@ class MujocoSimulator:
             RobotConfig.VIEWER_MODE_HAND_CAMERA_INSPECT: "hand camera (free inspect)",
             RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW: "attached debug camera view",
             RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_CONTROL: "attached debug camera view",
+            RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON: "third-person camera edit",
         }
         return labels.get(self._viewer_camera_mode, self._viewer_camera_mode)
 
     def _build_compact_status_text(self) -> str:
         """Compact fallback text block when separate panel is unavailable."""
-        attached_view_on = self._is_attached_debug_camera_mode(self._viewer_camera_mode)
+        attached_view_on = self._is_attached_debug_camera_view_mode(self._viewer_camera_mode)
+        third_person_edit_on = self._viewer_camera_mode == RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON
+        point_cloud_on = self._viewer_point_cloud_visible
         lines = [
             f"View mode: {self._viewer_mode_human_label()}",
             f"Attached debug camera view: {'ON' if attached_view_on else 'OFF'}",
-            f"Live preview: {'ATTACHED DEBUG CAMERA' if attached_view_on else 'NOT ACTIVE'}",
+            f"Third-person camera edit: {'ON' if third_person_edit_on else 'OFF'}",
+            f"Live preview: {'ACTIVE' if self._is_debug_camera_edit_mode(self._viewer_camera_mode) else 'NOT ACTIVE'}",
+            f"Point cloud: {'ON' if point_cloud_on else 'OFF'} ({self._viewer_point_cloud_points.shape[0]} pts)",
         ]
-        if attached_view_on:
+        if self._is_debug_camera_edit_mode(self._viewer_camera_mode):
             joint = self.get_debug_camera_joint_position()
             left_right_deg = np.rad2deg(joint[0])
             up_down_deg = -np.rad2deg(joint[1])
@@ -462,7 +510,7 @@ class MujocoSimulator:
             lines.append(f"Camera up/down: {up_down_deg:+.1f} deg")
             lines.append(f"Camera roll: {roll_deg:+.1f} deg")
             lines.append(f"Zoom (FOV): {self.get_debug_camera_zoom_fovy():.1f} deg")
-        lines.append("F7 view  Arrows rotate  ,/. roll  +/- zoom  U upright")
+        lines.append("F6 3rd-edit  F7 view  Arrows rotate  T flip-view  Y flip-dir  P/N pointcloud")
         return "\n".join(lines)
 
     @staticmethod
@@ -470,6 +518,7 @@ class MujocoSimulator:
         """Extended help text (hidden by default)."""
         return (
             "Attached debug camera controls\n"
+            "F6  : Enter/exit third-person camera edit\n"
             "F7  : Enter/exit attached debug camera view\n"
             "F8  : Quick toggle third-person <-> hand camera (fixed)\n"
             "F9  : Third-person view\n"
@@ -478,10 +527,12 @@ class MujocoSimulator:
             "F12 : Show/hide debug camera control window\n"
             "H   : Show/hide this help\n"
             "\n"
-            "Control window actions auto-enable attached debug camera live preview.\n"
-            "Left/Right/Up/Down step sizes can be adjusted independently in the panel.\n"
+            "Panel supports two live preview styles:\n"
+            "- attached debug camera view (first-person)\n"
+            "- third-person camera edit\n"
+            "Left/Right/Up/Down step sizes are independent.\n"
             "\n"
-            "While attached debug camera view is active\n"
+            "While preview is active (attached view or third-person edit)\n"
             "Left/Right : Camera left/right\n"
             "Up/Down    : Camera up/down\n"
             ", / .      : Camera roll left/right\n"
@@ -489,7 +540,9 @@ class MujocoSimulator:
             "R          : Reset camera orientation\n"
             "0          : Reset zoom\n"
             "U          : Upright home view\n"
-            "Y          : Flip direction 180 degrees\n"
+            "T          : Flip view 180 deg (screen axis)\n"
+            "Y          : Flip direction 180 deg (front/back)\n"
+            "P / N      : Point cloud ON/OFF, Refresh\n"
             "\n"
             "Note: Attached debug camera controls do not change\n"
             "mobile base, arm, or gripper APIs."
@@ -605,7 +658,9 @@ class MujocoSimulator:
         corrected[0] = self._wrap_to_pi(
             corrected[0] + float(RobotConfig.DEBUG_CAMERA_HOME_YAW_CORRECTION_RAD)
         )
-        corrected[2] = 0.0
+        corrected[2] = self._wrap_to_pi(
+            corrected[2] + float(RobotConfig.DEBUG_CAMERA_HOME_ROLL_CORRECTION_RAD)
+        )
         self.set_debug_camera_target_joint(corrected)
         return self.get_debug_camera_target_joint()
 
@@ -622,7 +677,7 @@ class MujocoSimulator:
         """Restore stable, upright home view for attached debug camera."""
         self.look_at_debug_camera_home_target()
         target = self.get_debug_camera_target_joint()
-        target[2] = 0.0
+        target[2] = self._wrap_to_pi(float(RobotConfig.DEBUG_CAMERA_HOME_ROLL_CORRECTION_RAD))
         self.set_debug_camera_target_joint(target)
         fovy = self.reset_debug_camera_zoom()
         return {
@@ -631,11 +686,103 @@ class MujocoSimulator:
         }
 
     def flip_debug_camera_direction_180(self) -> np.ndarray:
-        """Rotate attached debug camera horizontal direction by 180 degrees."""
+        """Flip camera front/back direction by 180 degrees (yaw-axis operation)."""
         target = self.get_debug_camera_target_joint()
         target[0] = self._wrap_to_pi(target[0] + np.pi)
         self.set_debug_camera_target_joint(target)
         return self.get_debug_camera_target_joint()
+
+    def flip_debug_camera_view_180(self) -> np.ndarray:
+        """Flip camera view by 180 degrees around screen-center axis (roll-axis operation)."""
+        target = self.get_debug_camera_target_joint()
+        target[2] = self._wrap_to_pi(target[2] + np.pi)
+        self.set_debug_camera_target_joint(target)
+        return self.get_debug_camera_target_joint()
+
+    def _set_viewer_point_cloud_visible(self, visible: bool) -> None:
+        self._viewer_point_cloud_visible = bool(visible)
+        if self._viewer_point_cloud_visible:
+            self._viewer_point_cloud_dirty = True
+
+    def _refresh_viewer_point_cloud(self, force_visible: bool = False) -> None:
+        if force_visible:
+            self._viewer_point_cloud_visible = True
+        self._viewer_point_cloud_dirty = True
+
+    def _update_viewer_point_cloud_cache(self) -> None:
+        if not self._viewer_point_cloud_visible:
+            return
+        now = time.time()
+        should_refresh = self._viewer_point_cloud_dirty
+        if not should_refresh and self._is_debug_camera_edit_mode(self._viewer_camera_mode):
+            should_refresh = (now - self._viewer_point_cloud_last_update_time) >= RobotConfig.VIEWER_POINT_CLOUD_AUTO_REFRESH_SEC
+        if not should_refresh:
+            return
+        try:
+            cloud = self.get_camera_point_cloud(
+                camera_name=RobotConfig.DEBUG_CAMERA_NAME,
+                stride=RobotConfig.VIEWER_POINT_CLOUD_STRIDE,
+                max_depth=RobotConfig.VIEWER_POINT_CLOUD_MAX_DEPTH,
+                frame="world",
+            )
+            num = int(cloud.get("num_points", 0))
+            if num <= 0:
+                self._viewer_point_cloud_points = np.zeros((0, 3), dtype=np.float32)
+                self._viewer_point_cloud_colors = np.zeros((0, 3), dtype=np.float32)
+            else:
+                points = np.array(cloud["points"], dtype=np.float32).reshape(-1, 3)
+                colors = np.array(cloud["colors"], dtype=np.float32).reshape(-1, 3)
+                max_points = int(RobotConfig.VIEWER_POINT_CLOUD_MAX_POINTS)
+                if points.shape[0] > max_points:
+                    idx = np.linspace(0, points.shape[0] - 1, max_points, dtype=np.int32)
+                    points = points[idx]
+                    colors = colors[idx]
+                self._viewer_point_cloud_points = points
+                self._viewer_point_cloud_colors = colors
+            self._viewer_point_cloud_last_error = None
+        except Exception as e:
+            self._viewer_point_cloud_last_error = str(e)
+            self._viewer_point_cloud_points = np.zeros((0, 3), dtype=np.float32)
+            self._viewer_point_cloud_colors = np.zeros((0, 3), dtype=np.float32)
+        self._viewer_point_cloud_last_update_time = now
+        self._viewer_point_cloud_dirty = False
+
+    def _render_viewer_point_cloud(self, viewer: Any) -> None:
+        user_scene = getattr(viewer, "user_scn", None)
+        if user_scene is None:
+            return
+        user_scene.ngeom = 0
+        if not self._viewer_point_cloud_visible:
+            return
+        points = self._viewer_point_cloud_points
+        colors = self._viewer_point_cloud_colors
+        if points.shape[0] == 0:
+            return
+        radius = float(RobotConfig.VIEWER_POINT_CLOUD_MARKER_RADIUS)
+        alpha = float(RobotConfig.VIEWER_POINT_CLOUD_MARKER_ALPHA)
+        mat = np.eye(3, dtype=np.float64).reshape(-1)
+        for i in range(points.shape[0]):
+            if user_scene.ngeom >= user_scene.maxgeom:
+                break
+            g = user_scene.geoms[user_scene.ngeom]
+            rgba = np.array(
+                [
+                    float(colors[i, 0]),
+                    float(colors[i, 1]),
+                    float(colors[i, 2]),
+                    alpha,
+                ],
+                dtype=np.float32,
+            )
+            mujoco.mjv_initGeom(
+                g,
+                mujoco.mjtGeom.mjGEOM_SPHERE,
+                np.array([radius, 0.0, 0.0], dtype=np.float64),
+                points[i].astype(np.float64),
+                mat,
+                rgba,
+            )
+            user_scene.ngeom += 1
 
     def _start_debug_camera_control_panel(self) -> None:
         """Start separate attached debug camera control window if tkinter is available."""
@@ -673,16 +820,17 @@ class MujocoSimulator:
             return
 
         root.title("Debug Camera Control")
-        root.geometry("440x730+20+120")
+        root.geometry("460x840+20+120")
         root.resizable(False, False)
 
         main = ttk.Frame(root, padding=10)
         main.pack(fill="both", expand=True)
 
         view_mode_var = tk.StringVar(value="View mode: -")
-        view_on_var = tk.StringVar(
-            value="Attached debug camera view: OFF\nLive preview: NOT ACTIVE"
-        )
+        view_on_var = tk.StringVar(value="Attached debug camera view: OFF\nThird-person camera edit: OFF")
+        preview_state_var = tk.StringVar(value="Live preview: NOT ACTIVE")
+        point_cloud_var = tk.StringVar(value="Point cloud: OFF (0 pts)")
+        preview_mode_var = tk.StringVar(value=self._debug_panel_preview_mode)
         lr_var = tk.StringVar(value="Camera left/right: +0.0 deg")
         ud_var = tk.StringVar(value="Camera up/down: +0.0 deg")
         roll_var = tk.StringVar(value="Camera roll: +0.0 deg")
@@ -707,23 +855,33 @@ class MujocoSimulator:
         )
         ttk.Label(main, textvariable=view_mode_var).grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
         ttk.Label(main, textvariable=view_on_var).grid(row=2, column=0, columnspan=4, sticky="w")
-        ttk.Label(main, textvariable=lr_var).grid(row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
-        ttk.Label(main, textvariable=ud_var).grid(row=4, column=0, columnspan=4, sticky="w")
-        ttk.Label(main, textvariable=roll_var).grid(row=5, column=0, columnspan=4, sticky="w")
-        ttk.Label(main, textvariable=zoom_var).grid(row=6, column=0, columnspan=4, sticky="w")
+        ttk.Label(main, textvariable=preview_state_var).grid(row=3, column=0, columnspan=4, sticky="w")
+        ttk.Label(main, textvariable=point_cloud_var).grid(row=4, column=0, columnspan=4, sticky="w")
+        ttk.Label(main, textvariable=lr_var).grid(row=5, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        ttk.Label(main, textvariable=ud_var).grid(row=6, column=0, columnspan=4, sticky="w")
+        ttk.Label(main, textvariable=roll_var).grid(row=7, column=0, columnspan=4, sticky="w")
+        ttk.Label(main, textvariable=zoom_var).grid(row=8, column=0, columnspan=4, sticky="w")
 
-        ttk.Label(main, text="Left step (deg)").grid(row=7, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(main, width=7, textvariable=left_step_var).grid(row=7, column=1, sticky="w", pady=(8, 0))
-        ttk.Label(main, text="Right step (deg)").grid(row=7, column=2, sticky="w", pady=(8, 0))
-        ttk.Entry(main, width=7, textvariable=right_step_var).grid(row=7, column=3, sticky="w", pady=(8, 0))
-        ttk.Label(main, text="Up step (deg)").grid(row=8, column=0, sticky="w", pady=(4, 0))
-        ttk.Entry(main, width=7, textvariable=up_step_var).grid(row=8, column=1, sticky="w", pady=(4, 0))
-        ttk.Label(main, text="Down step (deg)").grid(row=8, column=2, sticky="w", pady=(4, 0))
-        ttk.Entry(main, width=7, textvariable=down_step_var).grid(row=8, column=3, sticky="w", pady=(4, 0))
-        ttk.Label(main, text="Roll step (deg)").grid(row=9, column=0, sticky="w", pady=(4, 0))
-        ttk.Entry(main, width=7, textvariable=roll_step_var).grid(row=9, column=1, sticky="w", pady=(4, 0))
-        ttk.Label(main, text="Zoom step (deg)").grid(row=9, column=2, sticky="w", pady=(4, 0))
-        ttk.Entry(main, width=7, textvariable=zoom_step_var).grid(row=9, column=3, sticky="w", pady=(4, 0))
+        ttk.Label(main, text="Panel preview style").grid(row=9, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        ttk.Radiobutton(main, text="Attached camera view (first-person)", value="attached_view", variable=preview_mode_var).grid(
+            row=10, column=0, columnspan=2, sticky="w"
+        )
+        ttk.Radiobutton(main, text="Third-person camera edit", value="third_person_edit", variable=preview_mode_var).grid(
+            row=10, column=2, columnspan=2, sticky="w"
+        )
+
+        ttk.Label(main, text="Left step (deg)").grid(row=11, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(main, width=7, textvariable=left_step_var).grid(row=11, column=1, sticky="w", pady=(8, 0))
+        ttk.Label(main, text="Right step (deg)").grid(row=11, column=2, sticky="w", pady=(8, 0))
+        ttk.Entry(main, width=7, textvariable=right_step_var).grid(row=11, column=3, sticky="w", pady=(8, 0))
+        ttk.Label(main, text="Up step (deg)").grid(row=12, column=0, sticky="w", pady=(4, 0))
+        ttk.Entry(main, width=7, textvariable=up_step_var).grid(row=12, column=1, sticky="w", pady=(4, 0))
+        ttk.Label(main, text="Down step (deg)").grid(row=12, column=2, sticky="w", pady=(4, 0))
+        ttk.Entry(main, width=7, textvariable=down_step_var).grid(row=12, column=3, sticky="w", pady=(4, 0))
+        ttk.Label(main, text="Roll step (deg)").grid(row=13, column=0, sticky="w", pady=(4, 0))
+        ttk.Entry(main, width=7, textvariable=roll_step_var).grid(row=13, column=1, sticky="w", pady=(4, 0))
+        ttk.Label(main, text="Zoom step (deg)").grid(row=13, column=2, sticky="w", pady=(4, 0))
+        ttk.Entry(main, width=7, textvariable=zoom_step_var).grid(row=13, column=3, sticky="w", pady=(4, 0))
 
         def _read_angle_steps() -> Dict[str, float]:
             def _parse_or_default(raw: str, default: float) -> float:
@@ -770,75 +928,78 @@ class MujocoSimulator:
             )
             return step
 
-        def _ensure_debug_view_mode() -> None:
-            if not self._is_attached_debug_camera_mode(self._viewer_camera_mode):
-                self._debug_live_preview_pending = True
-                self._queue_viewer_camera_command(RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW)
+        def _queue_panel_action(command_name: str, *, ensure_preview: bool = True, coalesce_key: Optional[str] = None) -> None:
+            self._debug_live_preview_pending = bool(ensure_preview)
+            self._queue_viewer_camera_command(
+                {
+                    "type": "panel_action",
+                    "command": command_name,
+                    "preview_mode": preview_mode_var.get(),
+                    "ensure_preview": ensure_preview,
+                },
+                coalesce_key=coalesce_key,
+            )
 
         def _camera_left() -> None:
             _read_angle_steps()
-            _ensure_debug_view_mode()
-            self._queue_viewer_camera_command("debug_cam_yaw_left")
+            _queue_panel_action("debug_cam_yaw_left")
 
         def _camera_right() -> None:
             _read_angle_steps()
-            _ensure_debug_view_mode()
-            self._queue_viewer_camera_command("debug_cam_yaw_right")
+            _queue_panel_action("debug_cam_yaw_right")
 
         def _camera_up() -> None:
             _read_angle_steps()
-            _ensure_debug_view_mode()
-            self._queue_viewer_camera_command("debug_cam_pitch_up")
+            _queue_panel_action("debug_cam_pitch_up")
 
         def _camera_down() -> None:
             _read_angle_steps()
-            _ensure_debug_view_mode()
-            self._queue_viewer_camera_command("debug_cam_pitch_down")
+            _queue_panel_action("debug_cam_pitch_down")
 
         def _roll_left() -> None:
             _read_angle_steps()
-            _ensure_debug_view_mode()
-            self._queue_viewer_camera_command("debug_cam_roll_left")
+            _queue_panel_action("debug_cam_roll_left")
 
         def _roll_right() -> None:
             _read_angle_steps()
-            _ensure_debug_view_mode()
-            self._queue_viewer_camera_command("debug_cam_roll_right")
+            _queue_panel_action("debug_cam_roll_right")
 
         def _zoom_in() -> None:
             _read_zoom_step()
-            _ensure_debug_view_mode()
-            self._queue_viewer_camera_command("debug_cam_zoom_in")
+            _queue_panel_action("debug_cam_zoom_in")
 
         def _zoom_out() -> None:
             _read_zoom_step()
-            _ensure_debug_view_mode()
-            self._queue_viewer_camera_command("debug_cam_zoom_out")
+            _queue_panel_action("debug_cam_zoom_out")
 
         def _reset_camera_orientation() -> None:
-            _ensure_debug_view_mode()
-            self._queue_viewer_camera_command("debug_cam_reset_home")
+            _queue_panel_action("debug_cam_reset_home")
 
         def _reset_camera_zoom() -> None:
-            _ensure_debug_view_mode()
-            self._queue_viewer_camera_command("debug_cam_reset_zoom")
+            _queue_panel_action("debug_cam_reset_zoom")
 
         def _look_at_home_target() -> None:
-            _ensure_debug_view_mode()
-            self._queue_viewer_camera_command("debug_cam_look_at_home_target")
+            _queue_panel_action("debug_cam_look_at_home_target")
 
         def _upright_home_view() -> None:
-            _ensure_debug_view_mode()
-            self._queue_viewer_camera_command("debug_cam_upright_home")
+            _queue_panel_action("debug_cam_upright_home")
 
         def _flip_direction_180() -> None:
-            _ensure_debug_view_mode()
-            self._queue_viewer_camera_command("debug_cam_flip_direction_180")
+            _queue_panel_action("debug_cam_flip_direction_180")
+
+        def _flip_view_180() -> None:
+            _queue_panel_action("debug_cam_flip_view_180")
+
+        def _toggle_point_cloud() -> None:
+            _queue_panel_action("toggle_point_cloud", ensure_preview=False)
+
+        def _refresh_point_cloud() -> None:
+            _queue_panel_action("refresh_point_cloud", ensure_preview=False)
 
         def _set_from_sliders(*_args: Any) -> None:
             if slider_sync["updating"]:
                 return
-            _ensure_debug_view_mode()
+            self._debug_live_preview_pending = True
             target = np.array(
                 [
                     np.deg2rad(yaw_slider_var.get()),
@@ -852,7 +1013,8 @@ class MujocoSimulator:
                     "type": "panel_set_target_zoom",
                     "target": target.tolist(),
                     "fovy": float(zoom_slider_var.get()),
-                    "ensure_view": True,
+                    "preview_mode": preview_mode_var.get(),
+                    "ensure_preview": True,
                 },
                 coalesce_key="panel_target_zoom",
             )
@@ -862,88 +1024,102 @@ class MujocoSimulator:
         roll_slider_var.trace_add("write", _set_from_sliders)
         zoom_slider_var.trace_add("write", _set_from_sliders)
 
-        ttk.Button(main, text="Enter/Exit Attached Camera View (F7)", command=lambda: self._queue_viewer_camera_command("toggle_attached_debug_camera_view")).grid(
-            row=10, column=0, columnspan=4, sticky="ew", pady=(10, 4)
+        ttk.Button(main, text="Attached Camera View (F7)", command=lambda: self._queue_viewer_camera_command(RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW)).grid(
+            row=14, column=0, columnspan=2, sticky="ew", pady=(10, 4)
+        )
+        ttk.Button(main, text="Third-Person Camera Edit (F6)", command=lambda: self._queue_viewer_camera_command(RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON)).grid(
+            row=14, column=2, columnspan=2, sticky="ew", pady=(10, 4)
         )
         ttk.Button(main, text="Third-person", command=lambda: self._queue_viewer_camera_command(RobotConfig.VIEWER_MODE_THIRD_PERSON)).grid(
-            row=11, column=0, sticky="ew", pady=2
+            row=15, column=0, sticky="ew", pady=2
         )
         ttk.Button(main, text="Hand Camera", command=lambda: self._queue_viewer_camera_command(RobotConfig.VIEWER_MODE_HAND_CAMERA_FIXED)).grid(
-            row=11, column=1, sticky="ew", pady=2
+            row=15, column=1, sticky="ew", pady=2
         )
         ttk.Button(main, text="Inspect Mode", command=lambda: self._queue_viewer_camera_command(RobotConfig.VIEWER_MODE_HAND_CAMERA_INSPECT)).grid(
-            row=11, column=2, columnspan=2, sticky="ew", pady=2
+            row=15, column=2, columnspan=2, sticky="ew", pady=2
         )
 
-        ttk.Button(main, text="Camera Left", command=_camera_left).grid(row=12, column=0, sticky="ew", pady=2)
-        ttk.Button(main, text="Camera Right", command=_camera_right).grid(row=12, column=1, sticky="ew", pady=2)
-        ttk.Button(main, text="Camera Up", command=_camera_up).grid(row=12, column=2, sticky="ew", pady=2)
-        ttk.Button(main, text="Camera Down", command=_camera_down).grid(row=12, column=3, sticky="ew", pady=2)
-        ttk.Button(main, text="Roll Left", command=_roll_left).grid(row=13, column=0, sticky="ew", pady=2)
-        ttk.Button(main, text="Roll Right", command=_roll_right).grid(row=13, column=1, sticky="ew", pady=2)
-        ttk.Button(main, text="Zoom In", command=_zoom_in).grid(row=13, column=2, sticky="ew", pady=2)
-        ttk.Button(main, text="Zoom Out", command=_zoom_out).grid(row=13, column=3, sticky="ew", pady=2)
+        ttk.Button(main, text="Camera Left", command=_camera_left).grid(row=16, column=0, sticky="ew", pady=2)
+        ttk.Button(main, text="Camera Right", command=_camera_right).grid(row=16, column=1, sticky="ew", pady=2)
+        ttk.Button(main, text="Camera Up", command=_camera_up).grid(row=16, column=2, sticky="ew", pady=2)
+        ttk.Button(main, text="Camera Down", command=_camera_down).grid(row=16, column=3, sticky="ew", pady=2)
+        ttk.Button(main, text="Roll Left", command=_roll_left).grid(row=17, column=0, sticky="ew", pady=2)
+        ttk.Button(main, text="Roll Right", command=_roll_right).grid(row=17, column=1, sticky="ew", pady=2)
+        ttk.Button(main, text="Zoom In", command=_zoom_in).grid(row=17, column=2, sticky="ew", pady=2)
+        ttk.Button(main, text="Zoom Out", command=_zoom_out).grid(row=17, column=3, sticky="ew", pady=2)
 
-        ttk.Label(main, text="Left/Right angle").grid(row=14, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        ttk.Label(main, text="Left/Right angle").grid(row=18, column=0, columnspan=4, sticky="w", pady=(8, 0))
         ttk.Scale(main, from_=joint_limits_deg[0, 0], to=joint_limits_deg[0, 1], variable=yaw_slider_var).grid(
-            row=15, column=0, columnspan=4, sticky="ew"
-        )
-        ttk.Label(main, text="Up/Down angle").grid(row=16, column=0, columnspan=4, sticky="w", pady=(6, 0))
-        ttk.Scale(main, from_=-joint_limits_deg[1, 1], to=-joint_limits_deg[1, 0], variable=pitch_slider_var).grid(
-            row=17, column=0, columnspan=4, sticky="ew"
-        )
-        ttk.Label(main, text="Roll angle").grid(row=18, column=0, columnspan=4, sticky="w", pady=(6, 0))
-        ttk.Scale(main, from_=joint_limits_deg[2, 0], to=joint_limits_deg[2, 1], variable=roll_slider_var).grid(
             row=19, column=0, columnspan=4, sticky="ew"
         )
-        ttk.Label(main, text="Zoom (FOV)").grid(row=20, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Label(main, text="Up/Down angle").grid(row=20, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Scale(main, from_=-joint_limits_deg[1, 1], to=-joint_limits_deg[1, 0], variable=pitch_slider_var).grid(
+            row=21, column=0, columnspan=4, sticky="ew"
+        )
+        ttk.Label(main, text="Roll angle").grid(row=22, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Scale(main, from_=joint_limits_deg[2, 0], to=joint_limits_deg[2, 1], variable=roll_slider_var).grid(
+            row=23, column=0, columnspan=4, sticky="ew"
+        )
+        ttk.Label(main, text="Zoom (FOV)").grid(row=24, column=0, columnspan=4, sticky="w", pady=(6, 0))
         ttk.Scale(
             main,
             from_=RobotConfig.DEBUG_CAMERA_MAX_FOVY_DEG,
             to=RobotConfig.DEBUG_CAMERA_MIN_FOVY_DEG,
             variable=zoom_slider_var,
-        ).grid(row=21, column=0, columnspan=4, sticky="ew")
+        ).grid(row=25, column=0, columnspan=4, sticky="ew")
 
         ttk.Button(main, text="Reset Camera Orientation", command=_reset_camera_orientation).grid(
-            row=22, column=0, columnspan=2, sticky="ew", pady=(8, 2)
+            row=26, column=0, columnspan=2, sticky="ew", pady=(8, 2)
         )
         ttk.Button(main, text="Reset Zoom", command=_reset_camera_zoom).grid(
-            row=22, column=2, columnspan=2, sticky="ew", pady=(8, 2)
+            row=26, column=2, columnspan=2, sticky="ew", pady=(8, 2)
         )
         ttk.Button(main, text="Look At Home Target", command=_look_at_home_target).grid(
-            row=23, column=0, columnspan=2, sticky="ew", pady=2
+            row=27, column=0, columnspan=2, sticky="ew", pady=2
         )
         ttk.Button(main, text="Upright Home View", command=_upright_home_view).grid(
-            row=23, column=2, columnspan=2, sticky="ew", pady=2
+            row=27, column=2, columnspan=2, sticky="ew", pady=2
+        )
+        ttk.Button(main, text="Flip View 180 deg (screen axis)", command=_flip_view_180).grid(
+            row=28, column=0, columnspan=2, sticky="ew", pady=2
         )
         ttk.Button(main, text="Flip Direction 180 deg", command=_flip_direction_180).grid(
-            row=24, column=0, columnspan=4, sticky="ew", pady=2
+            row=28, column=2, columnspan=2, sticky="ew", pady=2
+        )
+        ttk.Button(main, text="Point Cloud ON/OFF", command=_toggle_point_cloud).grid(
+            row=29, column=0, columnspan=2, sticky="ew", pady=2
+        )
+        ttk.Button(main, text="Refresh Point Cloud", command=_refresh_point_cloud).grid(
+            row=29, column=2, columnspan=2, sticky="ew", pady=2
         )
 
         help_label = ttk.Label(
             main,
             text=(
-                "Shortcuts in attached debug camera view:\n"
+                "Shortcuts in active preview mode:\n"
                 "- Arrows: camera left/right/up/down\n"
                 "- Comma/Period: roll left/right\n"
                 "- Plus/Minus: zoom in/out\n"
-                "- R: reset camera, 0: reset zoom, U: upright home view, Y: flip direction 180\n"
-                "Panel controls auto-enable attached debug camera live preview.\n"
+                "- R: reset camera, 0: reset zoom, U: upright home view\n"
+                "- T: flip view 180 deg (screen axis), Y: flip direction 180 deg\n"
+                "- P/N: point cloud ON/OFF and refresh\n"
+                "Panel controls follow selected preview style.\n"
                 "Left/Right/Up/Down use independent step options (up to 180 deg)."
             ),
-            wraplength=390,
+            wraplength=420,
             justify="left",
         )
 
         def _toggle_help() -> None:
             help_visible.set(not help_visible.get())
             if help_visible.get():
-                help_label.grid(row=27, column=0, columnspan=4, sticky="w", pady=(8, 0))
+                help_label.grid(row=32, column=0, columnspan=4, sticky="w", pady=(8, 0))
             else:
                 help_label.grid_forget()
 
         ttk.Button(main, text="Show/Hide Help", command=_toggle_help).grid(
-            row=26, column=0, columnspan=4, sticky="ew", pady=(8, 0)
+            row=31, column=0, columnspan=4, sticky="ew", pady=(8, 0)
         )
 
         for col in range(4):
@@ -968,9 +1144,14 @@ class MujocoSimulator:
                     root.withdraw()
 
             mode_label = self._viewer_mode_human_label()
-            in_debug_view = self._is_attached_debug_camera_mode(self._viewer_camera_mode)
-            if in_debug_view:
+            in_debug_view = self._is_attached_debug_camera_view_mode(self._viewer_camera_mode)
+            in_third_edit = self._viewer_camera_mode == RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON
+            if self._is_debug_camera_edit_mode(self._viewer_camera_mode):
                 self._debug_live_preview_pending = False
+            if in_debug_view:
+                preview_mode_var.set("attached_view")
+            elif in_third_edit:
+                preview_mode_var.set("third_person_edit")
             joint = self.get_debug_camera_joint_position()
             left_right_deg = float(np.rad2deg(joint[0]))
             up_down_deg = float(-np.rad2deg(joint[1]))
@@ -979,14 +1160,24 @@ class MujocoSimulator:
 
             view_mode_var.set(f"View mode: {mode_label}")
             if in_debug_view:
-                live_preview_text = "Live preview: ATTACHED DEBUG CAMERA"
+                live_preview_text = "Live preview: ATTACHED DEBUG CAMERA VIEW"
+            elif in_third_edit:
+                live_preview_text = "Live preview: THIRD-PERSON CAMERA EDIT"
             elif self._debug_live_preview_pending:
-                live_preview_text = "Live preview: switching to attached debug camera..."
+                target_label = "attached camera view" if preview_mode_var.get() == "attached_view" else "third-person camera edit"
+                live_preview_text = f"Live preview: switching to {target_label}..."
             else:
                 live_preview_text = "Live preview: NOT ACTIVE"
             view_on_var.set(
-                f"Attached debug camera view: {'ON' if in_debug_view else 'OFF'}\n{live_preview_text}"
+                f"Attached debug camera view: {'ON' if in_debug_view else 'OFF'}\n"
+                f"Third-person camera edit: {'ON' if in_third_edit else 'OFF'}"
             )
+            preview_state_var.set(live_preview_text)
+            pc_error = self._viewer_point_cloud_last_error
+            pc_text = f"Point cloud: {'ON' if self._viewer_point_cloud_visible else 'OFF'} ({self._viewer_point_cloud_points.shape[0]} pts)"
+            if pc_error:
+                pc_text += " [last refresh error]"
+            point_cloud_var.set(pc_text)
             lr_var.set(f"Camera left/right: {left_right_deg:+.1f} deg")
             ud_var.set(f"Camera up/down: {up_down_deg:+.1f} deg")
             roll_var.set(f"Camera roll: {roll_deg:+.1f} deg")
@@ -1055,6 +1246,10 @@ class MujocoSimulator:
             "hand_camera_inspect": RobotConfig.VIEWER_MODE_HAND_CAMERA_INSPECT,
             "inspect": RobotConfig.VIEWER_MODE_HAND_CAMERA_INSPECT,
             "eye": RobotConfig.VIEWER_MODE_HAND_CAMERA_FIXED,
+            "attached_debug_camera_edit_third_person": RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON,
+            "debug_camera_edit_third_person": RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON,
+            "third_person_camera_edit": RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON,
+            "debug_camera_edit": RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON,
             "attached_debug_camera_view": RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW,
             "debug_camera_view": RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW,
             "attached_debug_camera_control": RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW,
@@ -1067,7 +1262,7 @@ class MujocoSimulator:
         if normalized is None:
             raise ValueError(
                 "mode must be one of: third_person, hand_camera_fixed, hand_camera_inspect, "
-                "attached_debug_camera_view, toggle"
+                "attached_debug_camera_view, attached_debug_camera_edit_third_person, toggle"
             )
         self._queue_viewer_camera_command(normalized)
 
@@ -1091,9 +1286,21 @@ class MujocoSimulator:
         """Toggle extended camera help panel."""
         self._queue_viewer_camera_command("toggle_help")
 
+    def toggle_viewer_point_cloud(self) -> None:
+        """Toggle viewer-side point cloud markers for attached debug camera."""
+        self._queue_viewer_camera_command("toggle_point_cloud")
+
+    def refresh_viewer_point_cloud(self) -> None:
+        """Refresh viewer-side point cloud markers for attached debug camera."""
+        self._queue_viewer_camera_command("refresh_point_cloud")
+
     def toggle_viewer_attached_debug_camera_view(self) -> None:
         """Toggle attached debug camera view on/off."""
         self._queue_viewer_camera_command("toggle_attached_debug_camera_view")
+
+    def toggle_viewer_attached_debug_camera_edit_third_person(self) -> None:
+        """Toggle third-person mode that edits attached debug camera orientation."""
+        self._queue_viewer_camera_command("toggle_attached_debug_camera_edit_third_person")
 
     def toggle_viewer_attached_debug_camera_control(self) -> None:
         """Backward-compatible alias for attached debug camera view toggle."""
@@ -1102,6 +1309,109 @@ class MujocoSimulator:
     def toggle_viewer_debug_camera_manual_mode(self) -> None:
         """Backward-compatible alias for attached debug camera view toggle."""
         self._queue_viewer_camera_command("toggle_attached_debug_camera_view")
+
+    def _resolve_panel_preview_mode(self, preview_mode: Any) -> str:
+        raw = str(preview_mode if preview_mode is not None else self._debug_panel_preview_mode).strip().lower()
+        if raw in (
+            "attached",
+            "attached_view",
+            "attached_debug_camera_view",
+            "camera_view",
+            "first_person",
+        ):
+            self._debug_panel_preview_mode = "attached_view"
+            return RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW
+        self._debug_panel_preview_mode = "third_person_edit"
+        return RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON
+
+    def _ensure_panel_preview_mode(self, viewer: Any, preview_mode: Any) -> None:
+        target_mode = self._resolve_panel_preview_mode(preview_mode)
+        if target_mode == RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW:
+            if not self._is_attached_debug_camera_view_mode(self._viewer_camera_mode):
+                self._viewer_mode_before_attached_debug = self._normalize_non_debug_restore_mode(
+                    self._viewer_camera_mode
+                )
+                self._set_viewer_camera_mode(viewer, target_mode)
+        elif self._viewer_camera_mode != RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON:
+            self._set_viewer_camera_mode(viewer, target_mode)
+        self._debug_live_preview_pending = False
+
+    def _apply_debug_camera_edit_command(self, command: str) -> bool:
+        if command == "debug_cam_yaw_left":
+            if self._is_debug_camera_edit_mode(self._viewer_camera_mode):
+                self._nudge_debug_camera_target(delta_yaw=+np.deg2rad(self._debug_camera_step_left_deg))
+                self._viewer_point_cloud_dirty = True
+            return True
+        if command == "debug_cam_yaw_right":
+            if self._is_debug_camera_edit_mode(self._viewer_camera_mode):
+                self._nudge_debug_camera_target(delta_yaw=-np.deg2rad(self._debug_camera_step_right_deg))
+                self._viewer_point_cloud_dirty = True
+            return True
+        if command == "debug_cam_pitch_up":
+            if self._is_debug_camera_edit_mode(self._viewer_camera_mode):
+                self._nudge_debug_camera_target(delta_pitch=-np.deg2rad(self._debug_camera_step_up_deg))
+                self._viewer_point_cloud_dirty = True
+            return True
+        if command == "debug_cam_pitch_down":
+            if self._is_debug_camera_edit_mode(self._viewer_camera_mode):
+                self._nudge_debug_camera_target(delta_pitch=+np.deg2rad(self._debug_camera_step_down_deg))
+                self._viewer_point_cloud_dirty = True
+            return True
+        if command == "debug_cam_roll_left":
+            if self._is_debug_camera_edit_mode(self._viewer_camera_mode):
+                self._nudge_debug_camera_target(delta_roll=+np.deg2rad(self._debug_camera_roll_step_deg))
+                self._viewer_point_cloud_dirty = True
+            return True
+        if command == "debug_cam_roll_right":
+            if self._is_debug_camera_edit_mode(self._viewer_camera_mode):
+                self._nudge_debug_camera_target(delta_roll=-np.deg2rad(self._debug_camera_roll_step_deg))
+                self._viewer_point_cloud_dirty = True
+            return True
+        if command == "debug_cam_zoom_in":
+            if self._is_debug_camera_edit_mode(self._viewer_camera_mode):
+                self.nudge_debug_camera_zoom(-self._debug_camera_zoom_step_deg)
+                self._viewer_point_cloud_dirty = True
+            return True
+        if command == "debug_cam_zoom_out":
+            if self._is_debug_camera_edit_mode(self._viewer_camera_mode):
+                self.nudge_debug_camera_zoom(+self._debug_camera_zoom_step_deg)
+                self._viewer_point_cloud_dirty = True
+            return True
+        if command == "debug_cam_reset_home":
+            self.reset_debug_camera_orientation()
+            self._viewer_point_cloud_dirty = True
+            return True
+        if command == "debug_cam_reset_zoom":
+            self.reset_debug_camera_zoom()
+            self._viewer_point_cloud_dirty = True
+            return True
+        if command == "debug_cam_look_at_home_target":
+            self.look_at_debug_camera_home_target()
+            self._viewer_point_cloud_dirty = True
+            return True
+        if command == "debug_cam_upright_home":
+            self.upright_reset_debug_camera()
+            self._viewer_point_cloud_dirty = True
+            return True
+        if command == "debug_cam_flip_direction_180":
+            self.flip_debug_camera_direction_180()
+            self._viewer_point_cloud_dirty = True
+            return True
+        if command == "debug_cam_flip_view_180":
+            self.flip_debug_camera_view_180()
+            self._viewer_point_cloud_dirty = True
+            return True
+        if command == "toggle_point_cloud":
+            next_state = not self._viewer_point_cloud_visible
+            self._set_viewer_point_cloud_visible(next_state)
+            state = "ON" if next_state else "OFF"
+            print(f"[VIEWER] Point cloud: {state}.")
+            return True
+        if command == "refresh_point_cloud":
+            self._refresh_viewer_point_cloud(force_visible=False)
+            print("[VIEWER] Point cloud refresh requested.")
+            return True
+        return False
 
     def _apply_viewer_camera_command(self, viewer: Any, command: Any) -> None:
         """Apply queued command on viewer state."""
@@ -1119,17 +1429,21 @@ class MujocoSimulator:
                     self.set_debug_camera_zoom_step_deg(float(command["zoom_step"]))
                 return
             if cmd_type == "panel_set_target_zoom":
-                if command.get("ensure_view", True) and not self._is_attached_debug_camera_mode(self._viewer_camera_mode):
-                    self._viewer_mode_before_attached_debug = self._normalize_non_debug_restore_mode(
-                        self._viewer_camera_mode
-                    )
-                    self._set_viewer_camera_mode(viewer, RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW)
-                    self._debug_live_preview_pending = False
+                if command.get("ensure_preview", True):
+                    self._ensure_panel_preview_mode(viewer, command.get("preview_mode"))
                 target = np.array(command.get("target", []), dtype=float).reshape(-1)
                 if target.shape[0] == 3:
                     self.set_debug_camera_target_joint(target)
                 if "fovy" in command:
                     self.set_debug_camera_zoom_fovy(float(command["fovy"]))
+                self._viewer_point_cloud_dirty = True
+                return
+            if cmd_type == "panel_action":
+                if command.get("ensure_preview", True):
+                    self._ensure_panel_preview_mode(viewer, command.get("preview_mode"))
+                inner_cmd = str(command.get("command", "")).strip()
+                if inner_cmd:
+                    self._apply_debug_camera_edit_command(inner_cmd)
                 return
 
         if command == "toggle":
@@ -1151,8 +1465,17 @@ class MujocoSimulator:
             status = "ON" if self._viewer_show_extended_help else "OFF"
             print(f"[VIEWER] Extended help: {status}.")
             return
+        if command == "toggle_attached_debug_camera_edit_third_person":
+            if self._viewer_camera_mode == RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON:
+                self._set_viewer_camera_mode(viewer, RobotConfig.VIEWER_MODE_THIRD_PERSON)
+                print("[VIEWER] Third-person camera edit: OFF.")
+            else:
+                self._set_viewer_camera_mode(viewer, RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_EDIT_THIRD_PERSON)
+                print("[VIEWER] Third-person camera edit: ON.")
+            self._debug_live_preview_pending = False
+            return
         if command == "toggle_attached_debug_camera_view":
-            if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
+            if self._is_attached_debug_camera_view_mode(self._viewer_camera_mode):
                 restore_mode = self._normalize_non_debug_restore_mode(
                     self._viewer_mode_before_attached_debug
                 )
@@ -1172,7 +1495,7 @@ class MujocoSimulator:
             return
         if command == "toggle_attached_debug_camera_control_mode":
             # Backward-compatible no-op wrapper: camera controls stay in view mode.
-            if not self._is_attached_debug_camera_mode(self._viewer_camera_mode):
+            if not self._is_attached_debug_camera_view_mode(self._viewer_camera_mode):
                 self._viewer_mode_before_attached_debug = self._normalize_non_debug_restore_mode(
                     self._viewer_camera_mode
                 )
@@ -1180,55 +1503,13 @@ class MujocoSimulator:
                     self._debug_live_preview_pending = False
                     print("[VIEWER] Attached debug camera view: ON.")
             return
-        if command == "debug_cam_yaw_left":
-            if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
-                self._nudge_debug_camera_target(delta_yaw=+np.deg2rad(self._debug_camera_step_left_deg))
-            return
-        if command == "debug_cam_yaw_right":
-            if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
-                self._nudge_debug_camera_target(delta_yaw=-np.deg2rad(self._debug_camera_step_right_deg))
-            return
-        if command == "debug_cam_pitch_up":
-            if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
-                self._nudge_debug_camera_target(delta_pitch=-np.deg2rad(self._debug_camera_step_up_deg))
-            return
-        if command == "debug_cam_pitch_down":
-            if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
-                self._nudge_debug_camera_target(delta_pitch=+np.deg2rad(self._debug_camera_step_down_deg))
-            return
-        if command == "debug_cam_roll_left":
-            if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
-                self._nudge_debug_camera_target(delta_roll=+np.deg2rad(self._debug_camera_roll_step_deg))
-            return
-        if command == "debug_cam_roll_right":
-            if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
-                self._nudge_debug_camera_target(delta_roll=-np.deg2rad(self._debug_camera_roll_step_deg))
-            return
-        if command == "debug_cam_zoom_in":
-            if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
-                self.nudge_debug_camera_zoom(-self._debug_camera_zoom_step_deg)
-            return
-        if command == "debug_cam_zoom_out":
-            if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
-                self.nudge_debug_camera_zoom(+self._debug_camera_zoom_step_deg)
-            return
-        if command == "debug_cam_reset_home":
-            self.reset_debug_camera_orientation()
-            return
-        if command == "debug_cam_reset_zoom":
-            self.reset_debug_camera_zoom()
-            return
-        if command == "debug_cam_look_at_home_target":
-            self.look_at_debug_camera_home_target()
-            return
-        if command == "debug_cam_upright_home":
-            self.upright_reset_debug_camera()
-            return
-        if command == "debug_cam_flip_direction_180":
-            self.flip_debug_camera_direction_180()
+        if isinstance(command, str) and self._apply_debug_camera_edit_command(command):
             return
 
-        if self._is_attached_debug_camera_mode(command) and not self._is_attached_debug_camera_mode(self._viewer_camera_mode):
+        if (
+            command == RobotConfig.VIEWER_MODE_ATTACHED_DEBUG_CAMERA_VIEW
+            and not self._is_attached_debug_camera_view_mode(self._viewer_camera_mode)
+        ):
             self._viewer_mode_before_attached_debug = self._normalize_non_debug_restore_mode(
                 self._viewer_camera_mode
             )
@@ -2212,7 +2493,11 @@ class MujocoSimulator:
         self._start_debug_camera_control_panel()
 
         def key_callback(keycode: int) -> None:
-            if keycode == RobotConfig.VIEWER_KEY_ATTACHED_DEBUG_CAMERA_VIEW_TOGGLE:
+            if keycode == RobotConfig.VIEWER_KEY_ATTACHED_DEBUG_CAMERA_EDIT_TOGGLE:
+                if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                    return
+                self._queue_viewer_camera_command("toggle_attached_debug_camera_edit_third_person")
+            elif keycode == RobotConfig.VIEWER_KEY_ATTACHED_DEBUG_CAMERA_VIEW_TOGGLE:
                 if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
                     return
                 self._queue_viewer_camera_command("toggle_attached_debug_camera_view")
@@ -2240,7 +2525,15 @@ class MujocoSimulator:
                 if not self._accept_viewer_key(RobotConfig.VIEWER_KEY_TOGGLE_HELP, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
                     return
                 self._queue_viewer_camera_command("toggle_help")
-            elif self._is_attached_debug_camera_mode(self._viewer_camera_mode):
+            elif keycode in (RobotConfig.VIEWER_KEY_POINT_CLOUD_TOGGLE, ord("p"), ord("P")):
+                if not self._accept_viewer_key(RobotConfig.VIEWER_KEY_POINT_CLOUD_TOGGLE, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                    return
+                self._queue_viewer_camera_command("toggle_point_cloud")
+            elif keycode in (RobotConfig.VIEWER_KEY_POINT_CLOUD_REFRESH, ord("n"), ord("N")):
+                if not self._accept_viewer_key(RobotConfig.VIEWER_KEY_POINT_CLOUD_REFRESH, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                    return
+                self._queue_viewer_camera_command("refresh_point_cloud")
+            elif self._is_debug_camera_edit_mode(self._viewer_camera_mode):
                 if keycode == RobotConfig.VIEWER_KEY_DEBUG_CAMERA_TILT_UP:
                     if not self._accept_viewer_key(keycode, RobotConfig.VIEWER_ARROW_KEY_REPEAT_SEC):
                         return
@@ -2289,6 +2582,10 @@ class MujocoSimulator:
                     if not self._accept_viewer_key(RobotConfig.VIEWER_KEY_DEBUG_CAMERA_FLIP_DIRECTION, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
                         return
                     self._queue_viewer_camera_command("debug_cam_flip_direction_180")
+                elif keycode in (RobotConfig.VIEWER_KEY_DEBUG_CAMERA_FLIP_VIEW, ord("t"), ord("T")):
+                    if not self._accept_viewer_key(RobotConfig.VIEWER_KEY_DEBUG_CAMERA_FLIP_VIEW, RobotConfig.VIEWER_FN_KEY_DEBOUNCE_SEC):
+                        return
+                    self._queue_viewer_camera_command("debug_cam_flip_view_180")
 
         try:
             with mujoco.viewer.launch_passive(self.model, self.data, key_callback=key_callback) as v:
@@ -2311,12 +2608,14 @@ class MujocoSimulator:
 
                 print(
                     "[VIEWER] Camera hotkeys: "
-                    "'F7' attached_debug_camera_view on/off, 'F8' third<->hand_fixed, "
+                    "'F6' third_person_camera_edit on/off, 'F7' attached_debug_camera_view on/off, "
+                    "'F8' third<->hand_fixed, "
                     "'F9' third_person, 'F10' hand_camera_fixed, 'F11' hand_camera_inspect, "
                     "'F12' debug control window on/off, 'H' help; "
                     "arrows rotate, ','/'.' roll, '+'/'-' zoom, 'R' reset, '0' zoom reset, 'U' upright home, "
-                    "'Y' flip 180 "
-                    "in attached debug camera view."
+                    "'T' flip view 180(screen axis), 'Y' flip direction 180(front/back), "
+                    "'P' pointcloud on/off, 'N' pointcloud refresh "
+                    "in active debug preview mode."
                 )
 
                 # Main loop
@@ -2350,7 +2649,7 @@ class MujocoSimulator:
                         self.data.ctrl[actuator_id] = debug_cam_control[i]
 
                     mujoco.mj_step(self.model, self.data)
-                    if self._is_attached_debug_camera_mode(self._viewer_camera_mode):
+                    if self._is_debug_camera_edit_mode(self._viewer_camera_mode):
                         self._stabilize_arm_for_debug_camera_view()
                     if RobotConfig.DEBUG_CAMERA_ENABLE_KINEMATIC_STABILIZATION:
                         self._apply_debug_camera_stabilization(
@@ -2366,6 +2665,10 @@ class MujocoSimulator:
                         with v.lock():
                             self._set_viewer_overlay(v)
                         self._viewer_overlay_last_update_time = now
+
+                    with v.lock():
+                        self._update_viewer_point_cloud_cache()
+                        self._render_viewer_point_cloud(v)
 
                     v.sync()
         finally:
